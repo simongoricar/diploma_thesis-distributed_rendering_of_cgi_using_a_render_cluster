@@ -1,0 +1,8 @@
+namespace testschema;
+file_identifier "TEST";
+
+table Test {
+    value:string;
+}
+
+root_type Test;

@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "master",
+    "shared",
+    "flatbuf"
+]

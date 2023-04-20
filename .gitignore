@@ -17,4 +17,5 @@ Cargo.lock
 .idea
 
 ## External tools
-flatbuf/tools
+serialization/tools
+serialization/src/compiled_definitions

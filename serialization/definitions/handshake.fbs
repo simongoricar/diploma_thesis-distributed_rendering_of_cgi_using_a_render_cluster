@@ -1,0 +1,15 @@
+/*
+ * This FlatBuffers file contains definitions of the initial handshake.
+ */
+
+table MasterServerHandshakeRequest {
+    server_version: string;
+}
+
+table WorkerClientHandshakeResponse {
+    worker_version: string;
+}
+
+table MasterServerHandshakeAcknowledgement {
+    ok: bool;
+}

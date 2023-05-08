@@ -1,4 +1,5 @@
 use std::io::ErrorKind;
+use std::time::Duration;
 use std::{future, io};
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};

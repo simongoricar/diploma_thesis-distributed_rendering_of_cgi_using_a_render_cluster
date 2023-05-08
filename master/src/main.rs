@@ -45,6 +45,7 @@ type ClientMap = Arc<Mutex<HashMap<SocketAddr, Client>>>;
 
 async fn run_client_connection(
     address: SocketAddr,
+    client_map: ClientMap,
     message_sender: UnboundedSender<tungstenite::Message>,
     mut message_receiver: UnboundedReceiver<WebSocketMessage>,
 ) -> Result<()> {
@@ -83,6 +84,19 @@ async fn run_client_connection(
         miette!("Could not send handshake acknowledgement.")
     })?;
 
+    {
+        let mut map = client_map
+            .lock()
+            .expect("Client map lock has been poisoned.");
+
+        let client = map
+            .get_mut(&address)
+            .ok_or_else(|| miette!("Missing client!"))?;
+        client.set_state(ClientState::Connected);
+    }
+
+    info!("[{address:?}] Handshake complete - fully connected!");
+
     // TODO
 
     Ok(())
@@ -92,7 +106,6 @@ async fn handle_incoming_client_messages(
     stream: SplitStream<WebSocketStream<TcpStream>>,
     receiver_queue: UnboundedSender<WebSocketMessage>,
 ) -> Result<()> {
-    // TODO Migrate to JSON, FlatBuffers are pointless at this stage.
     stream
         .try_for_each(|message| {
             match message {
@@ -114,7 +127,7 @@ async fn handle_incoming_client_messages(
                     }
                 }
                 tungstenite::Message::Binary(_) => {
-                    todo!("Not implement, need to handle binary websocket messages.");
+                    todo!("Not implemented, need to handle binary websocket messages.");
                 }
                 _ => {
                     future::ready(Ok(()))
@@ -177,8 +190,12 @@ async fn accept_and_set_up_client(
         handle_incoming_client_messages(ws_read, ws_receiver_tx);
 
     // Spawn main handler.
-    let client_connection_handler =
-        run_client_connection(address, ws_sender_tx, ws_receiver_rx);
+    let client_connection_handler = run_client_connection(
+        address,
+        client_map.clone(),
+        ws_sender_tx,
+        ws_receiver_rx,
+    );
 
     // Pin and run both futures until the connection is dropped.
     pin_mut!(

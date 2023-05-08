@@ -38,6 +38,14 @@ pub struct WorkerHandshakeResponse {
     pub worker_version: String,
 }
 
+impl WorkerHandshakeResponse {
+    pub fn new<S: Into<String>>(worker_version: S) -> Self {
+        Self {
+            worker_version: worker_version.into(),
+        }
+    }
+}
+
 impl Message for WorkerHandshakeResponse {
     fn type_name() -> &'static str {
         WORKER_HANDSHAKE_RESPONSE_TYPE_NAME

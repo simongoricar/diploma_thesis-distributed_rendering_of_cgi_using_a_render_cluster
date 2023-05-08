@@ -6,12 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serialization = { path = "../serialization" }
+shared = { path = "../shared" }
 tokio = { version = "1.27.0", features = ["full"] }
 tokio-tungstenite = "0.18.0"
 miette = { version = "5.7.0", features = ["fancy"] }
 log = "0.4.17"
 env_logger = "0.10.0"
+thiserror = "1.0.40"
 url = "2.3.1"
 futures-channel = "0.3.28"
 futures-util = "0.3.28"

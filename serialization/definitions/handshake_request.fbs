@@ -1,15 +1,10 @@
 /*
  * This FlatBuffers file contains definitions of the initial handshake.
  */
+file_identifier "HREQ";
 
 table MasterServerHandshakeRequest {
     server_version: string;
 }
 
-table WorkerClientHandshakeResponse {
-    worker_version: string;
-}
-
-table MasterServerHandshakeAcknowledgement {
-    ok: bool;
-}
+root_type MasterServerHandshakeRequest;

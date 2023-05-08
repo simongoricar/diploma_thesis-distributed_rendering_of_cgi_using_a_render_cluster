@@ -10,6 +10,7 @@ serialization = { path = "../serialization" }
 tokio = { version = "1.27.0", features = ["full"] }
 tokio-tungstenite = "0.18.0"
 miette = { version = "5.7.0", features = ["fancy"] }
+flatbuffers = "23.1.21"
 log = "0.4.17"
 env_logger = "0.10.0"
 url = "2.3.1"

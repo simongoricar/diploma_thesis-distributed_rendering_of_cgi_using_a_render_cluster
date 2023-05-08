@@ -1,0 +1,11 @@
+/*
+ * This FlatBuffers file contains definitions of the initial handshake.
+ */
+file_identifier "HACK";
+
+table MasterServerHandshakeAcknowledgement {
+    ok: bool;
+}
+
+root_type MasterServerHandshakeAcknowledgement;
+

@@ -1,0 +1,10 @@
+/*
+ * This FlatBuffers file contains definitions of the initial handshake.
+ */
+file_identifier "HRES";
+
+table WorkerClientHandshakeResponse {
+    worker_version: string;
+}
+
+root_type WorkerClientHandshakeResponse;

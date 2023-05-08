@@ -27,5 +27,7 @@ fn main() {
 
 
     // Compile all schemas (add any new ones here).
-    compile_schema(&flatc, "handshake.fbs");
+    compile_schema(&flatc, "handshake_request.fbs");
+    compile_schema(&flatc, "handshake_response.fbs");
+    compile_schema(&flatc, "handshake_acknowledgement.fbs");
 }

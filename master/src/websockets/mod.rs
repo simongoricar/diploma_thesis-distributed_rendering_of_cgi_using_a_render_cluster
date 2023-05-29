@@ -16,7 +16,7 @@ pub enum ConnectionState {
     PerformingHandshake,
     Connected {
         sender: Arc<UnboundedSender<tungstenite::Message>>,
-        receiver: Arc<Mutex<UnboundedReceiver<WebSocketMessage>>>,
+        receiver: Arc<tokio::sync::Mutex<UnboundedReceiver<WebSocketMessage>>>,
     },
 }
 
@@ -73,7 +73,8 @@ impl Client {
 
     pub fn receiver(
         &self,
-    ) -> Result<Arc<Mutex<UnboundedReceiver<WebSocketMessage>>>> {
+    ) -> Result<Arc<tokio::sync::Mutex<UnboundedReceiver<WebSocketMessage>>>>
+    {
         match &self.state.connection {
             ConnectionState::PerformingHandshake => Err(miette!(
                 "Connection has not been fully established yet."

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures_util::future::{join, try_join3};
-use futures_util::{pin_mut, StreamExt};
+use futures_util::future::{try_join, try_join3, TryJoin3};
+use futures_util::{future, pin_mut, StreamExt};
 use log::{debug, info};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
@@ -43,7 +43,7 @@ impl ManagerState {
     }
 }
 
-pub type SharedManagerState = Arc<Mutex<ManagerState>>;
+pub type SharedManagerState = Arc<std::sync::Mutex<ManagerState>>;
 
 pub struct ClusterManager {
     server_socket: TcpListener,
@@ -58,8 +58,9 @@ impl ClusterManager {
         let server_socket =
             TcpListener::bind("0.0.0.0:9901").await.into_diagnostic()?;
 
-        let shared_state =
-            SharedManagerState::new(Mutex::new(ManagerState::new(&job)));
+        let shared_state = SharedManagerState::new(std::sync::Mutex::new(
+            ManagerState::new(&job),
+        ));
 
         Ok(Self {
             server_socket,
@@ -70,19 +71,16 @@ impl ClusterManager {
 
     pub async fn run_server_and_job_to_completion(&mut self) -> Result<()> {
         // Keep accepting connections as long as possible.
-        let connection_acceptor = self.indefinitely_accept_connections();
+        let connection_acceptor =
+            self.indefinitely_accept_and_await_connections();
         let processing_loop = self.wait_for_readiness_and_complete_job();
 
-        let (result_one, result_two) =
-            join(connection_acceptor, processing_loop).await;
-
-        result_one?;
-        result_two?;
+        try_join(connection_acceptor, processing_loop).await?;
 
         Ok(())
     }
 
-    async fn indefinitely_accept_connections(&self) -> Result<()> {
+    async fn indefinitely_accept_and_await_connections(&self) -> Result<()> {
         loop {
             let (stream, address) = self
                 .server_socket
@@ -93,7 +91,7 @@ impl ClusterManager {
                     miette!("Could not accept socket connection.")
                 })?;
 
-            Self::accept_client_and_perform_handshake(
+            let new_client_future = Self::accept_client_and_perform_handshake(
                 self.state.clone(),
                 stream,
                 address,
@@ -102,7 +100,7 @@ impl ClusterManager {
         }
     }
 
-    async fn accept_client_and_perform_handshake(
+    async fn accept_client_and_perform_handshake<'a>(
         state: SharedManagerState,
         tcp_stream: TcpStream,
         address: SocketAddr,
@@ -140,7 +138,8 @@ impl ClusterManager {
             handle_incoming_client_messages(ws_read, ws_receiver_tx);
 
         let ws_sender_tx_arc = Arc::new(ws_sender_tx);
-        let ws_receiver_rx_arc = Arc::new(Mutex::new(ws_receiver_rx));
+        let ws_receiver_rx_arc =
+            Arc::new(tokio::sync::Mutex::new(ws_receiver_rx));
 
         // Spawn main handler.
         let client_handshake_handler = Self::perform_handshake_with_client(
@@ -150,36 +149,37 @@ impl ClusterManager {
             ws_receiver_rx_arc,
         );
 
-        // Pin and run both futures until the connection is dropped.
-        pin_mut!(
-            send_queued_messages,
-            receive_and_handle_messages,
-            client_handshake_handler
-        );
-
-        info!("[{address:?}] Running main connection handler.");
-        try_join3(
+        let super_future = try_join3(
             send_queued_messages,
             receive_and_handle_messages,
             client_handshake_handler,
-        )
-        .await?;
+        );
+
+        info!("[{address:?}] Running main connection handler.");
+        tokio::spawn(super_future);
+
+        Ok(())
 
         // Remove the lost client from the client map.
-        {
-            let client_map = &mut state
-                .lock()
-                .expect("Client map lock has been poisoned.")
-                .client_map;
-
-            client_map.remove(&address);
-        }
-
-        info!("Client {:?} disconnected.", address);
-        Ok(())
+        // {
+        //     let client_map = &mut state
+        //         .lock()
+        //         .expect("Client map lock has been poisoned.")
+        //         .client_map;
+        //
+        //     client_map.remove(&address);
+        // }
+        //
+        // info!("Client {:?} disconnected.", address);
+        // Ok(())
     }
 
     async fn wait_for_readiness_and_complete_job(&self) -> Result<()> {
+        info!(
+            "Waiting for at least {} workers before starting job.",
+            self.job.wait_for_number_of_workers
+        );
+
         loop {
             let num_clients = {
                 let clients_map = &self
@@ -216,7 +216,9 @@ impl ClusterManager {
         state: SharedManagerState,
         address: SocketAddr,
         message_sender: Arc<UnboundedSender<tungstenite::Message>>,
-        message_receiver: Arc<Mutex<UnboundedReceiver<WebSocketMessage>>>,
+        message_receiver: Arc<
+            tokio::sync::Mutex<UnboundedReceiver<WebSocketMessage>>,
+        >,
     ) -> Result<()> {
         info!("[{address:?}] Sending handshake request.");
 
@@ -228,9 +230,7 @@ impl ClusterManager {
 
         let handshake_response = {
             let next_message = {
-                let mut locked_receiver = message_receiver
-                    .lock()
-                    .expect("Receiver lock has been poisoned!");
+                let mut locked_receiver = message_receiver.lock().await;
 
                 locked_receiver
                     .next()

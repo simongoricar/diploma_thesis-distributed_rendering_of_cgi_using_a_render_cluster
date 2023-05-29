@@ -1,10 +1,9 @@
-use std::future::Future;
 use std::io;
 use std::io::ErrorKind;
-use std::pin::Pin;
+use std::time::Duration;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures_util::future::{try_join3, TryJoin3};
+use futures_util::future::try_join3;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{future, pin_mut, StreamExt, TryStreamExt};
 use log::{info, warn};
@@ -17,12 +16,6 @@ use tokio_tungstenite::{
     tungstenite,
     MaybeTlsStream,
     WebSocketStream,
-};
-
-use crate::{
-    handle_incoming_server_messages,
-    handle_outgoing_client_messages,
-    run_server_connection,
 };
 
 
@@ -208,6 +201,8 @@ impl ClientWorker {
         }
 
         info!("Server acknowledged handshake - fully connected!");
+
+        tokio::time::sleep(Duration::from_secs_f64(60f64 * 60f64)).await;
 
         // TODO Wait for further actions.
 

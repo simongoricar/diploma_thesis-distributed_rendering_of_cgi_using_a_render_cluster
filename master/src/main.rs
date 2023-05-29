@@ -1,33 +1,28 @@
 mod cli;
+mod manager;
 mod websockets;
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-use log::info;
+use clap::Parser;
 use miette::{IntoDiagnostic, Result};
-use tokio::net::TcpListener;
+use shared::jobs::BlenderJob;
 
-use crate::websockets::{accept_and_set_up_client, ClientMap};
-
+use crate::cli::{CLIArgs, CLICommand};
+use crate::manager::ClusterManager;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::try_init().into_diagnostic()?;
 
-    let server_socket =
-        TcpListener::bind("0.0.0.0:9901").await.into_diagnostic()?;
-    info!("Server running at 0.0.0.0:9901.");
+    let args = CLIArgs::parse();
 
-    let client_map = ClientMap::new(Mutex::new(HashMap::new()));
+    #[allow(irrefutable_let_patterns)]
+    if let CLICommand::RunJob(run_job_args) = args.command {
+        // TODO Need: - manager that has a vec of frames to render and distributes them
+        //              while the server is running
+        let job = BlenderJob::load_from_file(run_job_args.job_file_path)?;
+        let mut manager = ClusterManager::new_from_job(job).await?;
 
-
-    while let Ok((stream, address)) = server_socket.accept().await {
-        tokio::spawn(accept_and_set_up_client(
-            client_map.clone(),
-            stream,
-            address,
-        ));
+        manager.run_server_and_job_to_completion().await?;
     }
 
     Ok(())

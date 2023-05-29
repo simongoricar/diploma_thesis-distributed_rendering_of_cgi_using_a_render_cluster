@@ -1,0 +1,12 @@
+job_name = "test-job"
+job_description = "This is a test job."
+
+project_file_path = "%BASE%/blender-projects/project-cube/cube_v1.blend"
+
+frame_range_from = 1
+frame_range_to = 100
+
+wait_for_number_of_workers = 2
+
+output_directory_path = "%BASE%/blender-projects/project-cube/output"
+output_file_name_format = "#####"

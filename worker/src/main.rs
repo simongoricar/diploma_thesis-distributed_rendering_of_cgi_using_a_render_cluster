@@ -1,5 +1,6 @@
+mod worker;
+
 use std::io::ErrorKind;
-use std::time::Duration;
 use std::{future, io};
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -13,6 +14,8 @@ use shared::messages::WebSocketMessage;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+
+use crate::worker::ClientWorker;
 
 async fn handle_incoming_server_messages(
     stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
@@ -168,12 +171,8 @@ async fn handle_server_connection(
 async fn main() -> Result<()> {
     env_logger::try_init().into_diagnostic()?;
 
-    let server_address =
-        url::Url::parse("ws://127.0.0.1:9901").into_diagnostic()?;
-
-    info!("Connecting to 127.0.0.1:9901...");
-    let (stream, _) = connect_async(server_address).await.into_diagnostic()?;
-    handle_server_connection(stream).await?;
+    let client_worker = ClientWorker::connect().await?;
+    client_worker.run_indefinitely().await?;
 
     Ok(())
 }

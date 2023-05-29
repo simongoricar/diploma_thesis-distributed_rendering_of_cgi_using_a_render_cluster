@@ -9,7 +9,7 @@ edition = "2021"
 clap = { version = "4.2.4", features = ["derive"] }
 shared = { path = "../shared" }
 tokio = { version = "1.27.0", features = ["full"] }
-tokio-tungstenite = "0.18.0"
+tokio-tungstenite = "0.19.0"
 miette = { version = "5.7.0", features = ["fancy"] }
 log = "0.4.17"
 env_logger = "0.10.0"

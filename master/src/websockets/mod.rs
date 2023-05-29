@@ -1,26 +1,48 @@
-use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::{future, io};
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures_util::future::try_join3;
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{pin_mut, StreamExt, TryStreamExt};
-use log::{debug, info};
-use miette::{miette, Context, IntoDiagnostic, Result};
-use shared::messages::handshake::{
-    MasterHandshakeAcknowledgement,
-    MasterHandshakeRequest,
-};
+use futures_util::{StreamExt, TryStreamExt};
+use miette::{miette, IntoDiagnostic, Result};
+use shared::jobs::BlenderJob;
 use shared::messages::WebSocketMessage;
 use tokio::net::TcpStream;
-use tokio_tungstenite::{accept_async, tungstenite, WebSocketStream};
+use tokio_tungstenite::{tungstenite, WebSocketStream};
 
-pub enum ClientState {
+pub enum ConnectionState {
     PerformingHandshake,
-    Connected,
+    Connected {
+        sender: Arc<UnboundedSender<tungstenite::Message>>,
+        receiver: Arc<Mutex<UnboundedReceiver<WebSocketMessage>>>,
+    },
+}
+
+pub struct ClientQueueItem {
+    pub job: BlenderJob,
+    pub frame_index: usize,
+}
+
+impl ClientQueueItem {
+    pub fn new(job: BlenderJob, frame_index: usize) -> Self {
+        Self { job, frame_index }
+    }
+}
+
+pub struct ClientState {
+    pub connection: ConnectionState,
+    pub queue: Vec<ClientQueueItem>,
+}
+
+impl ClientState {
+    pub fn new() -> Self {
+        Self {
+            connection: ConnectionState::PerformingHandshake,
+            queue: Vec::new(),
+        }
+    }
 }
 
 pub struct Client {
@@ -32,75 +54,48 @@ impl Client {
     pub fn new(address: SocketAddr) -> Self {
         Self {
             address,
-            state: ClientState::PerformingHandshake,
+            state: ClientState::new(),
         }
     }
 
-    pub fn set_state(&mut self, state: ClientState) {
-        self.state = state;
+    pub fn set_connection_state(&mut self, state: ConnectionState) {
+        self.state.connection = state;
     }
-}
 
-pub type ClientMap = Arc<Mutex<HashMap<SocketAddr, Client>>>;
-
-pub async fn run_client_connection(
-    address: SocketAddr,
-    client_map: ClientMap,
-    message_sender: UnboundedSender<tungstenite::Message>,
-    mut message_receiver: UnboundedReceiver<WebSocketMessage>,
-) -> Result<()> {
-    info!("[{address:?}] Sending handshake request.");
-
-    let handshake_request: WebSocketMessage =
-        MasterHandshakeRequest::new("1.0.0").into();
-    handshake_request.send(&message_sender).wrap_err_with(|| {
-        miette!("Could not send initial handshake request.")
-    })?;
-
-    let handshake_response = {
-        let next_message = message_receiver
-            .next()
-            .await
-            .ok_or_else(|| miette!("No handshake response received."))?;
-
-        match next_message {
-            WebSocketMessage::WorkerHandshakeResponse(response) => response,
-            _ => {
-                return Err(miette!(
-                    "Invalid handshake response: not handshake_response!"
-                ));
-            }
+    pub fn sender(&self) -> Result<Arc<UnboundedSender<tungstenite::Message>>> {
+        match &self.state.connection {
+            ConnectionState::PerformingHandshake => Err(miette!(
+                "Connection has not been fully established yet."
+            )),
+            ConnectionState::Connected { sender, .. } => Ok(sender.clone()),
         }
-    };
-
-    info!(
-        "[{address:?}] Got handshake response: worker_version={}",
-        handshake_response.worker_version
-    );
-
-    let handshake_ack: WebSocketMessage =
-        MasterHandshakeAcknowledgement::new(true).into();
-    handshake_ack.send(&message_sender).wrap_err_with(|| {
-        miette!("Could not send handshake acknowledgement.")
-    })?;
-
-    {
-        let mut map = client_map
-            .lock()
-            .expect("Client map lock has been poisoned.");
-
-        let client = map
-            .get_mut(&address)
-            .ok_or_else(|| miette!("Missing client!"))?;
-        client.set_state(ClientState::Connected);
     }
 
-    info!("[{address:?}] Handshake complete - fully connected!");
+    pub fn receiver(
+        &self,
+    ) -> Result<Arc<Mutex<UnboundedReceiver<WebSocketMessage>>>> {
+        match &self.state.connection {
+            ConnectionState::PerformingHandshake => Err(miette!(
+                "Connection has not been fully established yet."
+            )),
+            ConnectionState::Connected { receiver, .. } => Ok(receiver.clone()),
+        }
+    }
 
-    // TODO
+    pub fn add_to_queue(&mut self, job: BlenderJob, frame_index: usize) {
+        self.state
+            .queue
+            .push(ClientQueueItem::new(job, frame_index));
+    }
 
-    Ok(())
+    pub fn remove_from_queue(&mut self, job_name: String, frame_index: usize) {
+        self.state.queue.retain(|item| {
+            item.job.job_name != job_name || item.frame_index != frame_index
+        });
+    }
 }
+
+
 
 pub async fn handle_incoming_client_messages(
     stream: SplitStream<WebSocketStream<TcpStream>>,
@@ -150,77 +145,5 @@ pub async fn handle_outgoing_server_messages(
         .await
         .into_diagnostic()?;
 
-    Ok(())
-}
-
-pub async fn accept_and_set_up_client(
-    client_map: ClientMap,
-    tcp_stream: TcpStream,
-    address: SocketAddr,
-) -> Result<()> {
-    debug!("[{address:?}] Accepting WebSocket connection.");
-    let websocket_stream = accept_async(tcp_stream).await.into_diagnostic()?;
-    info!("[{address:?}] Client accepted.");
-
-    // Put the just-accepted client into the client map.
-    {
-        let mut map = client_map
-            .lock()
-            .expect("Client map lock has been poisoned.");
-
-        map.insert(address, Client::new(address));
-    }
-
-    // Split the WebSocket stream into two parts: a sink for writing (sending) messages
-    // and a stream for reading (receiving) messages.
-    let (ws_write, ws_read) = websocket_stream.split();
-
-    // To send messages through the WebSocket, send a Message instance through this unbounded channel.
-    let (ws_sender_tx, ws_sender_rx) =
-        futures_channel::mpsc::unbounded::<tungstenite::Message>();
-    // To see received messages, read this channel.
-    let (ws_receiver_tx, ws_receiver_rx) =
-        futures_channel::mpsc::unbounded::<WebSocketMessage>();
-
-
-    // Prepare sending and receiving futures.
-    let send_queued_messages =
-        handle_outgoing_server_messages(ws_write, ws_sender_rx);
-    let receive_and_handle_messages =
-        handle_incoming_client_messages(ws_read, ws_receiver_tx);
-
-    // Spawn main handler.
-    let client_connection_handler = run_client_connection(
-        address,
-        client_map.clone(),
-        ws_sender_tx,
-        ws_receiver_rx,
-    );
-
-    // Pin and run both futures until the connection is dropped.
-    pin_mut!(
-        send_queued_messages,
-        receive_and_handle_messages,
-        client_connection_handler
-    );
-
-    info!("[{address:?}] Running main connection handler.");
-    try_join3(
-        send_queued_messages,
-        receive_and_handle_messages,
-        client_connection_handler,
-    )
-    .await?;
-
-    // Remove the lost client from the client map.
-    {
-        let mut map = client_map
-            .lock()
-            .expect("Client map lock has been poisoned.");
-
-        map.remove(&address);
-    }
-
-    info!("Client {:?} disconnected.", address);
     Ok(())
 }

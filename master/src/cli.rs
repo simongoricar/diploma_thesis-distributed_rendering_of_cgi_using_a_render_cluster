@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Parser)]
 pub struct CLIArgs {
     #[command(subcommand)]
-    command: CLICommand,
+    pub command: CLICommand,
 }
 
 #[derive(Subcommand)]
@@ -14,5 +14,5 @@ pub enum CLICommand {
 
 #[derive(Args, Eq, PartialEq)]
 pub struct RunJob {
-    job_file_path: String,
+    pub job_file_path: String,
 }

@@ -8,8 +8,14 @@ use crate::messages::handshake::{
     MasterHandshakeRequest,
     WorkerHandshakeResponse,
 };
+use crate::messages::queue::{
+    MasterFrameQueueAddRequest,
+    MasterFrameQueueRemoveRequest,
+    WorkerFrameQueueItemFinishedNotification,
+};
 
 pub mod handshake;
+pub mod queue;
 pub mod traits;
 
 
@@ -24,6 +30,17 @@ pub enum WebSocketMessage {
 
     #[serde(rename = "handshake_acknowledgement")]
     MasterHandshakeAcknowledgement(MasterHandshakeAcknowledgement),
+
+    #[serde(rename = "request_frame-queue_add")]
+    MasterFrameQueueAddRequest(MasterFrameQueueAddRequest),
+
+    #[serde(rename = "request_frame-queue_remove")]
+    MasterFrameQueueRemoveRequest(MasterFrameQueueRemoveRequest),
+
+    #[serde(rename = "request_frame-queue_remove")]
+    WorkerFrameQueueItemFinishedNotification(
+        WorkerFrameQueueItemFinishedNotification,
+    ),
 }
 
 impl WebSocketMessage {

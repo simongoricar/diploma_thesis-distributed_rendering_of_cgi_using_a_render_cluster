@@ -1,6 +1,6 @@
 use std::io;
 use std::io::ErrorKind;
-use std::time::Duration;
+use std::sync::Arc;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::future::try_join3;
@@ -17,6 +17,8 @@ use tokio_tungstenite::{
     MaybeTlsStream,
     WebSocketStream,
 };
+
+use crate::jobs::{BlenderJobRunner, WorkerAutomaticQueue};
 
 
 pub struct ClientWorker {
@@ -58,7 +60,10 @@ impl ClientWorker {
         })
     }
 
-    pub async fn run_indefinitely(self) -> Result<()> {
+    pub async fn run_indefinitely(
+        self,
+        blender_runner: BlenderJobRunner,
+    ) -> Result<()> {
         let send_queued_messages =
             Self::forward_outgoing_client_messages(self.ws_sink, self.sender_rx);
         let parse_and_forward_incoming_messages =
@@ -70,6 +75,7 @@ impl ClientWorker {
         let connection_handler = Self::perform_handshake_and_run_connection(
             self.sender_tx,
             self.receiver_rx,
+            blender_runner,
         );
 
         pin_mut!(
@@ -145,7 +151,12 @@ impl ClientWorker {
     async fn perform_handshake_and_run_connection(
         message_sender: UnboundedSender<tungstenite::Message>,
         mut message_receiver: UnboundedReceiver<WebSocketMessage>,
+        blender_runner: BlenderJobRunner,
     ) -> Result<()> {
+        /*
+         * Step 1: perform handshake
+         * (server request, worker response, server acknowledgement).
+         */
         info!("Waiting for handshake request.");
 
         let handshake_request = {
@@ -202,10 +213,45 @@ impl ClientWorker {
 
         info!("Server acknowledged handshake - fully connected!");
 
-        tokio::time::sleep(Duration::from_secs_f64(60f64 * 60f64)).await;
+        /*
+         * Step 2: until connection is dropped, receive requests, perform renders and report progress
+         */
+        let message_sender_arc = Arc::new(message_sender);
 
-        // TODO Wait for further actions.
+        let queue = WorkerAutomaticQueue::new(
+            blender_runner,
+            message_sender_arc.clone(),
+        );
+        queue.start().await;
 
-        Ok(())
+        // TODO
+        loop {
+            let next_message = message_receiver
+                .next()
+                .await
+                .ok_or_else(|| miette!("Could not receive next message."))?;
+
+            match next_message {
+                WebSocketMessage::MasterFrameQueueAddRequest(request) => {
+                    info!(
+                        "New frame queued: {}, frame {}",
+                        request.job.job_name, request.frame_index
+                    );
+                    queue.queue_frame(request.job, request.frame_index).await;
+                }
+                WebSocketMessage::MasterFrameQueueRemoveRequest(request) => {
+                    info!(
+                        "Frame removed from queue: {}, frame {}",
+                        request.job_name, request.frame_index
+                    );
+                    queue
+                        .unqueue_frame(request.job_name, request.frame_index)
+                        .await;
+                }
+                _ => {
+                    return Err(miette!("Invalid WebSocket message."));
+                }
+            }
+        }
     }
 }

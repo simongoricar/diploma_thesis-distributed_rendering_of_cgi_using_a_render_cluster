@@ -4,7 +4,7 @@ use std::path::Path;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct BlenderJob {
     pub job_name: String,
 
@@ -48,41 +48,3 @@ impl BlenderJob {
 }
 
 
-#[derive(Copy, Clone)]
-pub enum FrameState {
-    Pending,
-    InProgress,
-    Finished,
-}
-
-#[derive(Clone)]
-pub struct Frame {
-    index: usize,
-    state: FrameState,
-}
-
-impl Frame {
-    pub fn new_pending(index: usize) -> Self {
-        Self::new(index, FrameState::Pending)
-    }
-
-    pub fn new(index: usize, state: FrameState) -> Self {
-        Self { index, state }
-    }
-}
-
-
-pub struct BlenderJobState {
-    frames: Vec<Frame>,
-}
-
-impl BlenderJobState {
-    pub fn from_job(job: &BlenderJob) -> Self {
-        let total_frames = job.frame_range_to - job.frame_range_from + 1;
-
-        let states: Vec<Frame> =
-            (0..=total_frames).map(Frame::new_pending).collect();
-
-        Self { frames: states }
-    }
-}

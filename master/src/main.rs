@@ -1,6 +1,7 @@
-mod cli;
-mod manager;
-mod websockets;
+pub mod cli;
+pub mod jobs;
+pub mod manager;
+pub mod websockets;
 
 use clap::Parser;
 use log::info;

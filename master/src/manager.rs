@@ -4,20 +4,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures_util::future::{try_join, try_join3, TryJoin3};
-use futures_util::{future, pin_mut, StreamExt};
+use futures_util::future::{try_join, try_join3};
+use futures_util::StreamExt;
 use log::{debug, info};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
-use shared::jobs::{BlenderJob, BlenderJobState};
+use shared::jobs::BlenderJob;
 use shared::messages::handshake::{
     MasterHandshakeAcknowledgement,
     MasterHandshakeRequest,
 };
+use shared::messages::queue::MasterFrameQueueAddRequest;
 use shared::messages::WebSocketMessage;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite};
 
+use crate::jobs::MasterBlenderJobState;
 use crate::websockets::{
     handle_incoming_client_messages,
     handle_outgoing_server_messages,
@@ -25,30 +27,12 @@ use crate::websockets::{
     ConnectionState,
 };
 
-pub struct ManagerState {
-    client_map: HashMap<SocketAddr, Client>,
-
-    job_state: BlenderJobState,
-}
-
-impl ManagerState {
-    pub fn new(job: &BlenderJob) -> Self {
-        let client_map = HashMap::new();
-        let job_state = BlenderJobState::from_job(job);
-
-        Self {
-            client_map,
-            job_state,
-        }
-    }
-}
-
-pub type SharedManagerState = Arc<std::sync::Mutex<ManagerState>>;
-
 pub struct ClusterManager {
     server_socket: TcpListener,
 
-    state: SharedManagerState,
+    client_map: Arc<tokio::sync::Mutex<HashMap<SocketAddr, Client>>>,
+
+    job_state: Arc<tokio::sync::Mutex<MasterBlenderJobState>>,
 
     job: BlenderJob,
 }
@@ -58,13 +42,14 @@ impl ClusterManager {
         let server_socket =
             TcpListener::bind("0.0.0.0:9901").await.into_diagnostic()?;
 
-        let shared_state = SharedManagerState::new(std::sync::Mutex::new(
-            ManagerState::new(&job),
-        ));
-
         Ok(Self {
             server_socket,
-            state: shared_state,
+            client_map: Arc::new(tokio::sync::Mutex::new(
+                HashMap::with_capacity(job.wait_for_number_of_workers),
+            )),
+            job_state: Arc::new(tokio::sync::Mutex::new(
+                MasterBlenderJobState::from_job(job.clone()),
+            )),
             job,
         })
     }
@@ -91,17 +76,18 @@ impl ClusterManager {
                     miette!("Could not accept socket connection.")
                 })?;
 
-            let new_client_future = Self::accept_client_and_perform_handshake(
-                self.state.clone(),
+            tokio::spawn(Self::accept_client_and_perform_handshake(
+                self.client_map.clone(),
+                self.job_state.clone(),
                 stream,
                 address,
-            )
-            .await?;
+            ));
         }
     }
 
     async fn accept_client_and_perform_handshake<'a>(
-        state: SharedManagerState,
+        client_map: Arc<tokio::sync::Mutex<HashMap<SocketAddr, Client>>>,
+        job_state: Arc<tokio::sync::Mutex<MasterBlenderJobState>>,
         tcp_stream: TcpStream,
         address: SocketAddr,
     ) -> Result<()> {
@@ -112,12 +98,8 @@ impl ClusterManager {
 
         // Put the just-accepted client into the client map.
         {
-            let client_map = &mut state
-                .lock()
-                .expect("Shared state Mutex has been poisoned.")
-                .client_map;
-
-            client_map.insert(address, Client::new(address));
+            let client_map_locked = &mut client_map.lock().await;
+            client_map_locked.insert(address, Client::new(address));
         }
 
         // Split the WebSocket stream into two parts: a sink for writing (sending) messages
@@ -142,36 +124,24 @@ impl ClusterManager {
             Arc::new(tokio::sync::Mutex::new(ws_receiver_rx));
 
         // Spawn main handler.
-        let client_handshake_handler = Self::perform_handshake_with_client(
-            state.clone(),
-            address,
-            ws_sender_tx_arc,
-            ws_receiver_rx_arc,
-        );
+        let client_handshake_handler =
+            Self::perform_handshake_with_client_and_maintain_connection(
+                client_map.clone(),
+                job_state.clone(),
+                address,
+                ws_sender_tx_arc,
+                ws_receiver_rx_arc,
+            );
 
-        let super_future = try_join3(
+        info!("[{address:?}] Running main connection handler.");
+        try_join3(
             send_queued_messages,
             receive_and_handle_messages,
             client_handshake_handler,
-        );
-
-        info!("[{address:?}] Running main connection handler.");
-        tokio::spawn(super_future);
+        )
+        .await?;
 
         Ok(())
-
-        // Remove the lost client from the client map.
-        // {
-        //     let client_map = &mut state
-        //         .lock()
-        //         .expect("Client map lock has been poisoned.")
-        //         .client_map;
-        //
-        //     client_map.remove(&address);
-        // }
-        //
-        // info!("Client {:?} disconnected.", address);
-        // Ok(())
     }
 
     async fn wait_for_readiness_and_complete_job(&self) -> Result<()> {
@@ -182,13 +152,8 @@ impl ClusterManager {
 
         loop {
             let num_clients = {
-                let clients_map = &self
-                    .state
-                    .lock()
-                    .expect("Shared state Mutex has been poisoned!")
-                    .client_map;
-
-                clients_map.len()
+                let client_map_locked = &self.client_map.lock().await;
+                client_map_locked.len()
             };
 
             if num_clients >= self.job.wait_for_number_of_workers {
@@ -208,12 +173,64 @@ impl ClusterManager {
             self.job.wait_for_number_of_workers
         );
 
-        // TODO
-        Ok(())
+        loop {
+            let mut client_map_locked = self.client_map.lock().await;
+            let mut job_state_locked = self.job_state.lock().await;
+
+            // If no frames are left to render, exit.
+            if job_state_locked.next_frame_to_render().is_none()
+                && job_state_locked.have_all_frames_finished()
+            {
+                info!("All frames have been rendered!");
+                return Ok(());
+            }
+
+            // This is the actual queueing logic.
+
+            // Queue frames onto workers that don't have any frames to render.
+
+            for worker in client_map_locked.values_mut() {
+                if worker.has_empty_queue() {
+                    // Find next un-queued frame (break out of for loop if none left).
+                    let frame_index =
+                        match job_state_locked.next_frame_to_render() {
+                            Some(frame_index) => frame_index,
+                            None => {
+                                break;
+                            }
+                        };
+
+                    // Queue a yet-un-queued frame and reflect that change in `locked_state.job_state`.
+                    info!(
+                        "Queueing new frame on worker: {} on {}",
+                        frame_index, worker.address
+                    );
+
+                    let queue_request: WebSocketMessage =
+                        MasterFrameQueueAddRequest::new(
+                            self.job.clone(),
+                            frame_index,
+                        )
+                        .into();
+
+                    let client_sender = worker.sender()?;
+                    queue_request.send(&client_sender)?;
+
+                    job_state_locked
+                        .mark_frame_as_queued_on_worker(frame_index)?;
+                }
+            }
+
+            drop(client_map_locked);
+            drop(job_state_locked);
+
+            tokio::time::sleep(Duration::from_secs_f64(0.25f64)).await;
+        }
     }
 
-    async fn perform_handshake_with_client(
-        state: SharedManagerState,
+    async fn perform_handshake_with_client_and_maintain_connection(
+        client_map: Arc<tokio::sync::Mutex<HashMap<SocketAddr, Client>>>,
+        job_state: Arc<tokio::sync::Mutex<MasterBlenderJobState>>,
         address: SocketAddr,
         message_sender: Arc<UnboundedSender<tungstenite::Message>>,
         message_receiver: Arc<
@@ -260,12 +277,9 @@ impl ClusterManager {
         })?;
 
         {
-            let map = &mut state
-                .lock()
-                .expect("Shared state Mutex has been poisoned.")
-                .client_map;
+            let client_map_locked = &mut client_map.lock().await;
 
-            let client = map
+            let client = client_map_locked
                 .get_mut(&address)
                 .ok_or_else(|| miette!("Missing client!"))?;
 
@@ -277,8 +291,43 @@ impl ClusterManager {
 
         info!("[{address:?}] Handshake complete - fully connected!");
 
-        // TODO
+        loop {
+            let next_message = {
+                let mut locked_receiver = message_receiver.lock().await;
 
-        Ok(())
+                locked_receiver
+                    .next()
+                    .await
+                    .ok_or_else(|| miette!("Could not receive message."))?
+            };
+
+            match next_message {
+                WebSocketMessage::WorkerFrameQueueItemFinishedNotification(
+                    notification,
+                ) => {
+                    info!(
+                        "Frame {} has finished rendering on worker.",
+                        notification.frame_index
+                    );
+
+                    let client_map_locked = &mut client_map.lock().await;
+                    let job_state_locked = &mut job_state.lock().await;
+
+                    let client = client_map_locked
+                        .get_mut(&address)
+                        .ok_or_else(|| miette!("Missing client!"))?;
+                    client.remove_from_queue(
+                        notification.job_name,
+                        notification.frame_index,
+                    );
+
+                    job_state_locked
+                        .set_frame_completed(notification.frame_index)?;
+                }
+                _ => {
+                    return Err(miette!("Invalid worker message."));
+                }
+            }
+        }
     }
 }

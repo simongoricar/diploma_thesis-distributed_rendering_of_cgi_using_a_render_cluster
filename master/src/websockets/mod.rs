@@ -1,6 +1,6 @@
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{future, io};
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -81,6 +81,10 @@ impl Client {
             )),
             ConnectionState::Connected { receiver, .. } => Ok(receiver.clone()),
         }
+    }
+
+    pub fn has_empty_queue(&self) -> bool {
+        self.state.queue.is_empty()
     }
 
     pub fn add_to_queue(&mut self, job: BlenderJob, frame_index: usize) {

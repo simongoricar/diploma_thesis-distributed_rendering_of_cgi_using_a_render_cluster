@@ -19,4 +19,6 @@ Cargo.lock
 ## External tools
 serialization/tools
 serialization/src/compiled_definitions
-blender-projects/**/01-test.png
+
+## Other assets
+blender-projects/**/*.png

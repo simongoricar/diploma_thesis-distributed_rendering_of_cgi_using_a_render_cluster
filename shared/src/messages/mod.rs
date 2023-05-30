@@ -8,6 +8,10 @@ use crate::messages::handshake::{
     MasterHandshakeRequest,
     WorkerHandshakeResponse,
 };
+use crate::messages::heartbeat::{
+    MasterHeartbeatRequest,
+    WorkerHeartbeatResponse,
+};
 use crate::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
@@ -42,6 +46,12 @@ pub enum WebSocketMessage {
     WorkerFrameQueueItemFinishedNotification(
         WorkerFrameQueueItemFinishedNotification,
     ),
+
+    #[serde(rename = "request_heartbeat")]
+    MasterHeartbeatRequest(MasterHeartbeatRequest),
+
+    #[serde(rename = "response_heartbeat")]
+    WorkerHeartbeatResponse(WorkerHeartbeatResponse),
 }
 
 impl WebSocketMessage {

@@ -1,3 +1,4 @@
+use miette::{miette, Report};
 use serde::{Deserialize, Serialize};
 
 use crate::messages::traits::Message;
@@ -25,12 +26,22 @@ impl From<MasterHeartbeatRequest> for WebSocketMessage {
         WebSocketMessage::MasterHeartbeatRequest(value)
     }
 }
+impl TryFrom<WebSocketMessage> for MasterHeartbeatRequest {
+    type Error = Report;
+
+    fn try_from(value: WebSocketMessage) -> Result<Self, Self::Error> {
+        match value {
+            WebSocketMessage::MasterHeartbeatRequest(request) => Ok(request),
+            _ => Err(miette!("Invalid message type!")),
+        }
+    }
+}
 
 
 
 pub static WORKER_HEARTBEAT_RESPONSE_TYPE_NAME: &str = "request_heartbeat";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct WorkerHeartbeatResponse {}
 
 impl WorkerHeartbeatResponse {
@@ -48,5 +59,15 @@ impl Message for WorkerHeartbeatResponse {
 impl From<WorkerHeartbeatResponse> for WebSocketMessage {
     fn from(value: WorkerHeartbeatResponse) -> Self {
         WebSocketMessage::WorkerHeartbeatResponse(value)
+    }
+}
+impl TryFrom<WebSocketMessage> for WorkerHeartbeatResponse {
+    type Error = Report;
+
+    fn try_from(value: WebSocketMessage) -> Result<Self, Self::Error> {
+        match value {
+            WebSocketMessage::WorkerHeartbeatResponse(response) => Ok(response),
+            _ => Err(miette!("Invalid message type!")),
+        }
     }
 }

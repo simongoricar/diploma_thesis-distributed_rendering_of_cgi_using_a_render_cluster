@@ -32,12 +32,9 @@ async fn main() -> Result<()> {
             })?;
 
         info!("Running server to job completion.");
-        manager
-            .run_server_and_job_to_completion()
-            .await
-            .wrap_err_with(|| {
-                miette!("Could not run server and job to completion.")
-            })?;
+        manager.run_job_to_completion().await.wrap_err_with(|| {
+            miette!("Could not run server and job to completion.")
+        })?;
     }
 
     Ok(())

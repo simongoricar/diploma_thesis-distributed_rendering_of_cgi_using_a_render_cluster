@@ -1,3 +1,4 @@
+use miette::{miette, Report};
 use serde::{Deserialize, Serialize};
 
 use crate::messages::traits::Message;
@@ -28,6 +29,16 @@ impl From<MasterHandshakeRequest> for WebSocketMessage {
         WebSocketMessage::MasterHandshakeRequest(value)
     }
 }
+impl TryFrom<WebSocketMessage> for MasterHandshakeRequest {
+    type Error = Report;
+
+    fn try_from(value: WebSocketMessage) -> Result<Self, Self::Error> {
+        match value {
+            WebSocketMessage::MasterHandshakeRequest(request) => Ok(request),
+            _ => Err(miette!("Invalid message type!")),
+        }
+    }
+}
 
 
 
@@ -56,6 +67,16 @@ impl From<WorkerHandshakeResponse> for WebSocketMessage {
         WebSocketMessage::WorkerHandshakeResponse(value)
     }
 }
+impl TryFrom<WebSocketMessage> for WorkerHandshakeResponse {
+    type Error = Report;
+
+    fn try_from(value: WebSocketMessage) -> Result<Self, Self::Error> {
+        match value {
+            WebSocketMessage::WorkerHandshakeResponse(response) => Ok(response),
+            _ => Err(miette!("Invalid message type!")),
+        }
+    }
+}
 
 
 
@@ -80,5 +101,15 @@ impl Message for MasterHandshakeAcknowledgement {
 impl From<MasterHandshakeAcknowledgement> for WebSocketMessage {
     fn from(value: MasterHandshakeAcknowledgement) -> Self {
         WebSocketMessage::MasterHandshakeAcknowledgement(value)
+    }
+}
+impl TryFrom<WebSocketMessage> for MasterHandshakeAcknowledgement {
+    type Error = Report;
+
+    fn try_from(value: WebSocketMessage) -> Result<Self, Self::Error> {
+        match value {
+            WebSocketMessage::MasterHandshakeAcknowledgement(ack) => Ok(ack),
+            _ => Err(miette!("Invalid message type!")),
+        }
     }
 }

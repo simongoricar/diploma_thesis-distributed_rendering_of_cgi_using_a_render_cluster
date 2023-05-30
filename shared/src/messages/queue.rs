@@ -1,11 +1,11 @@
+use miette::{miette, Report};
 use serde::{Deserialize, Serialize};
 
 use crate::jobs::BlenderJob;
 use crate::messages::traits::Message;
 use crate::messages::WebSocketMessage;
 
-pub static MASTER_FRAME_QUEUE_ADD_REQUEST_TYPE_NAME: &str =
-    "request_frame-queue_add";
+pub static MASTER_FRAME_QUEUE_ADD_REQUEST_TYPE_NAME: &str = "request_frame-queue_add";
 
 #[derive(Serialize, Deserialize)]
 pub struct MasterFrameQueueAddRequest {
@@ -29,11 +29,20 @@ impl From<MasterFrameQueueAddRequest> for WebSocketMessage {
         WebSocketMessage::MasterFrameQueueAddRequest(value)
     }
 }
+impl TryFrom<WebSocketMessage> for MasterFrameQueueAddRequest {
+    type Error = Report;
+
+    fn try_from(value: WebSocketMessage) -> Result<Self, Self::Error> {
+        match value {
+            WebSocketMessage::MasterFrameQueueAddRequest(request) => Ok(request),
+            _ => Err(miette!("Invalid message type!")),
+        }
+    }
+}
 
 
 
-pub static MASTER_FRAME_QUEUE_REMOVE_REQUEST_TYPE_NAME: &str =
-    "request_frame-queue_remove";
+pub static MASTER_FRAME_QUEUE_REMOVE_REQUEST_TYPE_NAME: &str = "request_frame-queue_remove";
 
 #[derive(Serialize, Deserialize)]
 pub struct MasterFrameQueueRemoveRequest {
@@ -60,13 +69,23 @@ impl From<MasterFrameQueueRemoveRequest> for WebSocketMessage {
         WebSocketMessage::MasterFrameQueueRemoveRequest(value)
     }
 }
+impl TryFrom<WebSocketMessage> for MasterFrameQueueRemoveRequest {
+    type Error = Report;
+
+    fn try_from(value: WebSocketMessage) -> Result<Self, Self::Error> {
+        match value {
+            WebSocketMessage::MasterFrameQueueRemoveRequest(request) => Ok(request),
+            _ => Err(miette!("Invalid message type!")),
+        }
+    }
+}
 
 
 
 pub static WORKER_FRAME_QUEUE_ITEM_FINISHED_NOTIFICATION_TYPE_NAME: &str =
     "notification_frame-queue_item-finished";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct WorkerFrameQueueItemFinishedNotification {
     pub job_name: String,
     pub frame_index: usize,
@@ -89,5 +108,17 @@ impl Message for WorkerFrameQueueItemFinishedNotification {
 impl From<WorkerFrameQueueItemFinishedNotification> for WebSocketMessage {
     fn from(value: WorkerFrameQueueItemFinishedNotification) -> Self {
         WebSocketMessage::WorkerFrameQueueItemFinishedNotification(value)
+    }
+}
+impl TryFrom<WebSocketMessage> for WorkerFrameQueueItemFinishedNotification {
+    type Error = Report;
+
+    fn try_from(value: WebSocketMessage) -> Result<Self, Self::Error> {
+        match value {
+            WebSocketMessage::WorkerFrameQueueItemFinishedNotification(notification) => {
+                Ok(notification)
+            }
+            _ => Err(miette!("Invalid message type!")),
+        }
     }
 }

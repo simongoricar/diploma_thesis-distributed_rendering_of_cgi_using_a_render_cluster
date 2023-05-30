@@ -8,15 +8,13 @@ use crate::messages::handshake::{
     MasterHandshakeRequest,
     WorkerHandshakeResponse,
 };
-use crate::messages::heartbeat::{
-    MasterHeartbeatRequest,
-    WorkerHeartbeatResponse,
-};
+use crate::messages::heartbeat::{MasterHeartbeatRequest, WorkerHeartbeatResponse};
 use crate::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
     WorkerFrameQueueItemFinishedNotification,
 };
+use crate::messages::traits::Message;
 
 pub mod handshake;
 pub mod heartbeat;
@@ -43,9 +41,7 @@ pub enum WebSocketMessage {
     MasterFrameQueueRemoveRequest(MasterFrameQueueRemoveRequest),
 
     #[serde(rename = "request_frame-queue_remove")]
-    WorkerFrameQueueItemFinishedNotification(
-        WorkerFrameQueueItemFinishedNotification,
-    ),
+    WorkerFrameQueueItemFinishedNotification(WorkerFrameQueueItemFinishedNotification),
 
     #[serde(rename = "request_heartbeat")]
     MasterHeartbeatRequest(MasterHeartbeatRequest),
@@ -55,9 +51,11 @@ pub enum WebSocketMessage {
 }
 
 impl WebSocketMessage {
-    pub fn from_websocket_message(
-        message: tungstenite::Message,
-    ) -> Result<Self> {
+    pub fn from_json_string(string: String) -> Result<Self> {
+        serde_json::from_str::<WebSocketMessage>(&string).into_diagnostic()
+    }
+
+    pub fn from_websocket_message(message: tungstenite::Message) -> Result<Self> {
         match message {
             tungstenite::Message::Text(string) => {
                 let ws_message: WebSocketMessage =
@@ -65,9 +63,7 @@ impl WebSocketMessage {
                 Ok(ws_message)
             }
             tungstenite::Message::Binary(_) => {
-                todo!(
-                    "Not implemented, need to handle binary websocket messages."
-                );
+                todo!("Not implemented, need to handle binary websocket messages.");
             }
             _ => Err(miette!("Invalid WebSocket message type.")),
         }
@@ -81,15 +77,33 @@ impl WebSocketMessage {
         Ok(tungstenite::Message::Text(serialized_string))
     }
 
-    pub fn send(
-        &self,
-        sender: &UnboundedSender<tungstenite::Message>,
-    ) -> Result<()> {
+    pub fn send(&self, sender: &UnboundedSender<tungstenite::Message>) -> Result<()> {
         sender
             .unbounded_send(self.to_websocket_message()?)
             .into_diagnostic()
             .wrap_err_with(|| miette!("Could not queue WebSocket message."))?;
 
         Ok(())
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            WebSocketMessage::MasterHandshakeRequest(_) => MasterHandshakeRequest::type_name(),
+            WebSocketMessage::WorkerHandshakeResponse(_) => WorkerHandshakeResponse::type_name(),
+            WebSocketMessage::MasterHandshakeAcknowledgement(_) => {
+                MasterHandshakeAcknowledgement::type_name()
+            }
+            WebSocketMessage::MasterFrameQueueAddRequest(_) => {
+                MasterFrameQueueAddRequest::type_name()
+            }
+            WebSocketMessage::MasterFrameQueueRemoveRequest(_) => {
+                MasterFrameQueueRemoveRequest::type_name()
+            }
+            WebSocketMessage::WorkerFrameQueueItemFinishedNotification(_) => {
+                WorkerFrameQueueItemFinishedNotification::type_name()
+            }
+            WebSocketMessage::MasterHeartbeatRequest(_) => MasterHeartbeatRequest::type_name(),
+            WebSocketMessage::WorkerHeartbeatResponse(_) => WorkerHeartbeatResponse::type_name(),
+        }
     }
 }

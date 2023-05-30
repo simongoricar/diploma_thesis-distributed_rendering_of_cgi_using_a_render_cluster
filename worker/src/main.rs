@@ -4,7 +4,7 @@ mod worker;
 
 use clap::Parser;
 use log::info;
-use miette::{IntoDiagnostic, Result};
+use miette::{miette, Context, IntoDiagnostic, Result};
 
 use crate::cli::CLIArgs;
 use crate::jobs::BlenderJobRunner;
@@ -17,7 +17,9 @@ async fn main() -> Result<()> {
     let args = CLIArgs::parse();
 
     info!("Initializing ClientWorker.");
-    let client_worker = ClientWorker::connect().await?;
+    let client_worker = ClientWorker::connect()
+        .await
+        .wrap_err_with(|| miette!("Could not connect to master server."))?;
 
     info!("Initializing BlenderJobRunner.");
     let runner = BlenderJobRunner::new(
@@ -26,7 +28,10 @@ async fn main() -> Result<()> {
     )?;
 
     info!("Running worker indefinitely.");
-    client_worker.run_indefinitely(runner).await?;
+    client_worker
+        .run_indefinitely(runner)
+        .await
+        .wrap_err_with(|| miette!("Errored while running worker."))?;
 
     Ok(())
 }

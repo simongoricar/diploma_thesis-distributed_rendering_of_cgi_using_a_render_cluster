@@ -89,7 +89,8 @@ impl ClientWorker {
             parse_and_forward_incoming_messages,
             connection_handler,
         )
-        .await?;
+        .await
+        .wrap_err_with(|| miette!("Errored while running connection."))?;
 
         Ok(())
     }
@@ -105,7 +106,12 @@ impl ClientWorker {
             .map(Ok)
             .forward(ws_sink)
             .await
-            .into_diagnostic()?;
+            .into_diagnostic()
+            .wrap_err_with(|| {
+                miette!(
+                    "Could not forward outgoing message through the WebSocket."
+                )
+            })?;
 
         Ok(())
     }
@@ -143,7 +149,8 @@ impl ClientWorker {
                 }
             })
             .await
-            .into_diagnostic()?;
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Could not parse/forward incoming WebSocket message."))?;
 
         Ok(())
     }

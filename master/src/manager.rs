@@ -60,7 +60,8 @@ impl ClusterManager {
             self.indefinitely_accept_and_await_connections();
         let processing_loop = self.wait_for_readiness_and_complete_job();
 
-        try_join(connection_acceptor, processing_loop).await?;
+        try_join(connection_acceptor, processing_loop).await
+            .wrap_err_with(|| miette!("Errored while running connection acceptor / processing loop."))?;
 
         Ok(())
     }
@@ -92,8 +93,10 @@ impl ClusterManager {
         address: SocketAddr,
     ) -> Result<()> {
         debug!("[{address:?}] Accepting WebSocket connection.");
-        let websocket_stream =
-            accept_async(tcp_stream).await.into_diagnostic()?;
+        let websocket_stream = accept_async(tcp_stream)
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Could not accept WebSocket stream."))?;
         info!("[{address:?}] Client accepted.");
 
         // Put the just-accepted client into the client map.
@@ -139,7 +142,8 @@ impl ClusterManager {
             receive_and_handle_messages,
             client_handshake_handler,
         )
-        .await?;
+        .await
+            .wrap_err_with(|| miette!("Errored while sending and receiving messages / running connection with master."))?;
 
         Ok(())
     }
@@ -213,11 +217,18 @@ impl ClusterManager {
                         )
                         .into();
 
-                    let client_sender = worker.sender()?;
-                    queue_request.send(&client_sender)?;
+                    let client_sender = worker.sender().wrap_err_with(|| {
+                        miette!("Could not get worker's sender channel.")
+                    })?;
+                    queue_request.send(&client_sender).wrap_err_with(|| {
+                        miette!("Could not send queue request to worker.")
+                    })?;
 
                     job_state_locked
-                        .mark_frame_as_queued_on_worker(frame_index)?;
+                        .mark_frame_as_queued_on_worker(frame_index)
+                        .wrap_err_with(|| {
+                            miette!("Could not locally mark frame as queued.")
+                        })?;
                 }
             }
 
@@ -316,13 +327,17 @@ impl ClusterManager {
                     let client = client_map_locked
                         .get_mut(&address)
                         .ok_or_else(|| miette!("Missing client!"))?;
+
                     client.remove_from_queue(
                         notification.job_name,
                         notification.frame_index,
                     );
 
                     job_state_locked
-                        .set_frame_completed(notification.frame_index)?;
+                        .set_frame_completed(notification.frame_index)
+                        .wrap_err_with(|| {
+                            miette!("Could not locally set frame as completed.")
+                        })?;
                 }
                 _ => {
                     return Err(miette!("Invalid worker message."));

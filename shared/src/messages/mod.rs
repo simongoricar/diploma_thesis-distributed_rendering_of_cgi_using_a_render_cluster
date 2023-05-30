@@ -15,6 +15,7 @@ use crate::messages::queue::{
 };
 
 pub mod handshake;
+pub mod heartbeat;
 pub mod queue;
 pub mod traits;
 

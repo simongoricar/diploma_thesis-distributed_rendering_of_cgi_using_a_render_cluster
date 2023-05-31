@@ -41,7 +41,7 @@ impl TryFrom<WebSocketMessage> for MasterHeartbeatRequest {
 
 pub static WORKER_HEARTBEAT_RESPONSE_TYPE_NAME: &str = "request_heartbeat";
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerHeartbeatResponse {}
 
 impl WorkerHeartbeatResponse {

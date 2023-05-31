@@ -95,12 +95,14 @@ impl ClusterManager {
             client_map_locked.insert(address, worker);
         }
 
-        // TODO
+        // TODO What happens when the worker disconnects?
 
         Ok(())
     }
 
     async fn wait_for_readiness_and_complete_job(&self) -> Result<()> {
+        // TODO Rewrite this with new Worker abstraction.
+
         info!(
             "Waiting for at least {} workers before starting job.",
             self.job.wait_for_number_of_workers
@@ -128,7 +130,27 @@ impl ClusterManager {
             "READY! At least {} clients connected, starting job.",
             self.job.wait_for_number_of_workers
         );
+        
+        loop {
+            let mut client_map_locked = self.client_map.lock().await;
+            let mut job_state_locked = self.job_state.lock().await;
 
+            // If no frames are left to render, exit this future.
+            if job_state_locked.next_frame_to_render().is_none()
+                && job_state_locked.have_all_frames_finished()
+            {
+                info!("All frames have been rendered!");
+                return Ok(());
+            }
+            
+            // Queue frames onto worker that don't have any queued frames yet.
+            for worker in client_map_locked.values_mut() {
+                
+            }
+            
+        }
+        
+        // DEPRECATED below, rewriting above
         loop {
             let mut client_map_locked = self.client_map.lock().await;
             let mut job_state_locked = self.job_state.lock().await;

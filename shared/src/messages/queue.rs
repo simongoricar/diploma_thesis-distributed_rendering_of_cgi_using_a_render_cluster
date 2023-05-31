@@ -85,7 +85,7 @@ impl TryFrom<WebSocketMessage> for MasterFrameQueueRemoveRequest {
 pub static WORKER_FRAME_QUEUE_ITEM_FINISHED_NOTIFICATION_TYPE_NAME: &str =
     "notification_frame-queue_item-finished";
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerFrameQueueItemFinishedNotification {
     pub job_name: String,
     pub frame_index: usize,

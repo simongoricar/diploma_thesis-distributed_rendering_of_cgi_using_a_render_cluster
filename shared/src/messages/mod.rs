@@ -1,4 +1,5 @@
-use futures_channel::mpsc::UnboundedSender;
+use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures_util::stream::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite;
@@ -20,6 +21,31 @@ pub mod handshake;
 pub mod heartbeat;
 pub mod queue;
 pub mod traits;
+
+
+pub fn parse_websocket_message(message: tungstenite::Message) -> Result<Option<WebSocketMessage>> {
+    match message {
+        tungstenite::Message::Text(text_message) => Ok(Some(WebSocketMessage::from_json_string(
+            text_message,
+        )?)),
+        _ => Ok(None),
+    }
+}
+
+pub async fn receive_exact_message<M: Message + TryFrom<WebSocketMessage>>(
+    receiver_channel: &mut UnboundedReceiver<WebSocketMessage>,
+) -> Result<M> {
+    let next_message = receiver_channel
+        .next()
+        .await
+        .ok_or_else(|| miette!("Could not get next incoming message."))?;
+
+    if let Ok(message) = next_message.try_into() {
+        Ok(message)
+    } else {
+        Err(miette!("Unexpected incoming message type."))
+    }
+}
 
 
 #[derive(Serialize, Deserialize)]

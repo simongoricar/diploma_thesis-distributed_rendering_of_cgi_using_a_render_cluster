@@ -4,7 +4,7 @@ use std::path::Path;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct BlenderJob {
     pub job_name: String,
 
@@ -41,10 +41,6 @@ impl BlenderJob {
 
         toml::from_str(&file_contents)
             .into_diagnostic()
-            .wrap_err_with(|| {
-                miette!("Could not parse TOML contents of job file.")
-            })
+            .wrap_err_with(|| miette!("Could not parse TOML contents of job file."))
     }
 }
-
-

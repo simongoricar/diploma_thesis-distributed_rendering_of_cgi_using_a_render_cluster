@@ -7,7 +7,7 @@ use crate::messages::WebSocketMessage;
 
 pub static MASTER_FRAME_QUEUE_ADD_REQUEST_TYPE_NAME: &str = "request_frame-queue_add";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MasterFrameQueueAddRequest {
     pub job: BlenderJob,
     pub frame_index: usize,
@@ -44,7 +44,7 @@ impl TryFrom<WebSocketMessage> for MasterFrameQueueAddRequest {
 
 pub static MASTER_FRAME_QUEUE_REMOVE_REQUEST_TYPE_NAME: &str = "request_frame-queue_remove";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MasterFrameQueueRemoveRequest {
     pub job_name: String,
     pub frame_index: usize,

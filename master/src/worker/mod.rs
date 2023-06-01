@@ -25,7 +25,7 @@ use shared::messages::queue::{
     WorkerFrameQueueItemFinishedNotification,
 };
 use shared::messages::traits::IntoWebSocketMessage;
-use shared::messages::{traits, WebSocketMessage};
+use shared::messages::{parse_websocket_message, receive_exact_message, WebSocketMessage};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -41,29 +41,7 @@ pub enum WorkerConnectionState {
     Connected,
 }
 
-fn parse_websocket_message(message: Message) -> Result<Option<WebSocketMessage>> {
-    match message {
-        Message::Text(text_message) => Ok(Some(WebSocketMessage::from_json_string(
-            text_message,
-        )?)),
-        _ => Ok(None),
-    }
-}
 
-async fn receive_exact_message<M: traits::Message + TryFrom<WebSocketMessage>>(
-    receiver_channel: &mut UnboundedReceiver<WebSocketMessage>,
-) -> Result<M> {
-    let next_message = receiver_channel
-        .next()
-        .await
-        .ok_or_else(|| miette!("Could not get next incoming message."))?;
-
-    if let Ok(message) = next_message.try_into() {
-        Ok(message)
-    } else {
-        Err(miette!("Unexpected incoming message type."))
-    }
-}
 
 pub struct Worker {
     pub address: SocketAddr,
@@ -197,7 +175,9 @@ impl Worker {
         logger.debug("Waiting for handshake to complete.");
         worker_connection_future_set.join_next().await;
         if !handshake_handle.is_finished() {
-            return Err(miette!("BUG: Incorrect task completed."));
+            return Err(miette!(
+                "BUG: Incorrect task completed (expected handshake)."
+            ));
         }
 
         let event_dispatcher = WorkerEventDispatcher::new(
@@ -210,6 +190,7 @@ impl Worker {
                 .into_inner(),
         )
         .await;
+
         let event_dispatcher_arc = Arc::new(event_dispatcher);
 
         worker_connection_future_set.spawn(Self::maintain_heartbeat(
@@ -346,7 +327,11 @@ impl Worker {
                 notification = queue_item_finished_receiver.recv() => {
                     let notification: WorkerFrameQueueItemFinishedNotification = notification.into_diagnostic()?;
 
-                    debug!("Received: Queue item finished, frame: {}", notification.frame_index);
+                    debug!(
+                        "Received: Queue item finished, frame: {}",
+                        notification.frame_index
+                    );
+
                     Self::mark_frame_as_finished(
                         notification.job_name,
                         notification.frame_index,

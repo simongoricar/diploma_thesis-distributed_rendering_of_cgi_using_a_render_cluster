@@ -29,9 +29,9 @@ async fn main() -> Result<()> {
 
     info!("Running worker indefinitely.");
     client_worker
-        .run_indefinitely(runner)
+        .run_forever(runner)
         .await
-        .wrap_err_with(|| miette!("Errored while running worker."))?;
+        .wrap_err_with(|| miette!("Errored while running worker"))?;
 
     Ok(())
 }

@@ -6,7 +6,7 @@ use crate::messages::WebSocketMessage;
 
 pub static MASTER_HEARTBEAT_REQUEST_TYPE_NAME: &str = "request_heartbeat";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MasterHeartbeatRequest {}
 
 impl MasterHeartbeatRequest {

@@ -11,15 +11,6 @@ use shared::messages::queue::WorkerFrameQueueItemFinishedNotification;
 use shared::messages::WebSocketMessage;
 use tokio::sync::broadcast;
 
-
-#[deprecated]
-#[derive(Eq, PartialEq, Hash)]
-pub enum WorkerEventType {
-    HeartbeatResponse,
-    QueueItemFinishedNotification,
-    // TODO
-}
-
 pub struct WorkerEventDispatcher {
     heartbeat_response_sender: Arc<broadcast::Sender<WorkerHeartbeatResponse>>,
 
@@ -33,7 +24,7 @@ pub struct WorkerEventDispatcher {
 }
 
 impl WorkerEventDispatcher {
-    pub async fn new(receiver_channel: UnboundedReceiver<WebSocketMessage>) -> Self {
+    pub async fn new(websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>) -> Self {
         let (heartbeat_tx, heartbeat_rx) = broadcast::channel::<WorkerHeartbeatResponse>(512);
         let (queue_item_finished_tx, queue_item_finished_rx) =
             broadcast::channel::<WorkerFrameQueueItemFinishedNotification>(512);
@@ -44,7 +35,7 @@ impl WorkerEventDispatcher {
         tokio::spawn(Self::run(
             heartbeat_tx_arc.clone(),
             queue_item_finished_tx_arc.clone(),
-            receiver_channel,
+            websocket_receiver_channel,
         ));
 
         Self {
@@ -56,14 +47,16 @@ impl WorkerEventDispatcher {
     }
 
     async fn run(
-        heartbeat_channel_sender: Arc<broadcast::Sender<WorkerHeartbeatResponse>>,
-        queue_item_finished_sender: Arc<broadcast::Sender<WorkerFrameQueueItemFinishedNotification>>,
-        mut receiver_channel: UnboundedReceiver<WebSocketMessage>,
+        heartbeat_channel_event_sender: Arc<broadcast::Sender<WorkerHeartbeatResponse>>,
+        queue_item_finished_event_sender: Arc<
+            broadcast::Sender<WorkerFrameQueueItemFinishedNotification>,
+        >,
+        mut websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>,
     ) {
         info!("WorkerEventDispatcher: Running event distribution loop.");
 
         loop {
-            let next_message = match receiver_channel.next().await {
+            let next_message = match websocket_receiver_channel.next().await {
                 Some(message) => message,
                 None => {
                     warn!("WorkerEventDispatcher: Can't receive message from channel, aborting event dispatcher task.");
@@ -73,12 +66,12 @@ impl WorkerEventDispatcher {
 
             match next_message {
                 WebSocketMessage::WorkerFrameQueueItemFinishedNotification(notification) => {
-                    queue_item_finished_sender
+                    queue_item_finished_event_sender
                         .send(notification)
                         .expect("Could not send queue item finished event.");
                 }
                 WebSocketMessage::WorkerHeartbeatResponse(response) => {
-                    heartbeat_channel_sender
+                    heartbeat_channel_event_sender
                         .send(response)
                         .expect("Could not send heartbeat response event.");
                 }
@@ -93,7 +86,7 @@ impl WorkerEventDispatcher {
     }
 
     /*
-     * Public event subscription and unsubscription methods.
+     * Public event channel methods.
      */
 
     pub fn queue_item_finished_receiver(
@@ -109,6 +102,7 @@ impl WorkerEventDispatcher {
     /*
      * One-shot async event methods
      */
+
     pub async fn wait_for_queue_item_finished(
         &self,
         timeout: Duration,
@@ -125,10 +119,7 @@ impl WorkerEventDispatcher {
 
         let timeout_future = tokio::time::timeout(timeout, queue_item_finished_future).await;
         match timeout_future {
-            Ok(notification_result) => match notification_result {
-                Ok(notification) => Ok(notification),
-                Err(error) => Err(error),
-            },
+            Ok(notification_result) => notification_result,
             Err(_) => Err(miette!(
                 "Waiting for queue item finished notification timed out."
             )),
@@ -158,6 +149,4 @@ impl WorkerEventDispatcher {
             )),
         }
     }
-
-    // TODO Subscribing methods, async awaitable requests and such
 }

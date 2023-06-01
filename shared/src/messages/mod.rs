@@ -13,7 +13,10 @@ use crate::messages::heartbeat::{MasterHeartbeatRequest, WorkerHeartbeatResponse
 use crate::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
-    WorkerFrameQueueItemFinishedNotification,
+    WorkerFrameQueueAddResponse,
+    WorkerFrameQueueItemFinishedEvent,
+    WorkerFrameQueueItemRenderingEvent,
+    WorkerFrameQueueRemoveResponse,
 };
 use crate::messages::traits::Message;
 
@@ -21,6 +24,7 @@ pub mod handshake;
 pub mod heartbeat;
 pub mod queue;
 pub mod traits;
+mod utilities;
 
 
 pub fn parse_websocket_message(message: tungstenite::Message) -> Result<Option<WebSocketMessage>> {
@@ -51,6 +55,9 @@ pub async fn receive_exact_message<M: Message + TryFrom<WebSocketMessage>>(
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "message_type", content = "payload")]
 pub enum WebSocketMessage {
+    /*
+     * Handshake
+     */
     #[serde(rename = "handshake_request")]
     MasterHandshakeRequest(MasterHandshakeRequest),
 
@@ -60,15 +67,33 @@ pub enum WebSocketMessage {
     #[serde(rename = "handshake_acknowledgement")]
     MasterHandshakeAcknowledgement(MasterHandshakeAcknowledgement),
 
+    /*
+     * Frame queue requests / responses
+     */
     #[serde(rename = "request_frame-queue_add")]
     MasterFrameQueueAddRequest(MasterFrameQueueAddRequest),
+
+    #[serde(rename = "response_frame-queue-add")]
+    WorkerFrameQueueAddResponse(WorkerFrameQueueAddResponse),
 
     #[serde(rename = "request_frame-queue_remove")]
     MasterFrameQueueRemoveRequest(MasterFrameQueueRemoveRequest),
 
-    #[serde(rename = "notification_frame-queue_item-finished")]
-    WorkerFrameQueueItemFinishedNotification(WorkerFrameQueueItemFinishedNotification),
+    #[serde(rename = "response_frame-queue_remove")]
+    WorkerFrameQueueRemoveResponse(WorkerFrameQueueRemoveResponse),
 
+    /*
+     * Frame queue events
+     */
+    #[serde(rename = "event_frame-queue_item-started-rendering")]
+    WorkerFrameQueueItemRenderingEvent(WorkerFrameQueueItemRenderingEvent),
+
+    #[serde(rename = "event_frame-queue_item-finished")]
+    WorkerFrameQueueItemFinishedEvent(WorkerFrameQueueItemFinishedEvent),
+
+    /*
+     * Heartbeats
+     */
     #[serde(rename = "request_heartbeat")]
     MasterHeartbeatRequest(MasterHeartbeatRequest),
 
@@ -122,11 +147,20 @@ impl WebSocketMessage {
             WebSocketMessage::MasterFrameQueueAddRequest(_) => {
                 MasterFrameQueueAddRequest::type_name()
             }
+            WebSocketMessage::WorkerFrameQueueAddResponse(_) => {
+                WorkerFrameQueueAddResponse::type_name()
+            }
             WebSocketMessage::MasterFrameQueueRemoveRequest(_) => {
                 MasterFrameQueueRemoveRequest::type_name()
             }
-            WebSocketMessage::WorkerFrameQueueItemFinishedNotification(_) => {
-                WorkerFrameQueueItemFinishedNotification::type_name()
+            WebSocketMessage::WorkerFrameQueueRemoveResponse(_) => {
+                WorkerFrameQueueRemoveResponse::type_name()
+            }
+            WebSocketMessage::WorkerFrameQueueItemRenderingEvent(_) => {
+                WorkerFrameQueueItemRenderingEvent::type_name()
+            }
+            WebSocketMessage::WorkerFrameQueueItemFinishedEvent(_) => {
+                WorkerFrameQueueItemFinishedEvent::type_name()
             }
             WebSocketMessage::MasterHeartbeatRequest(_) => MasterHeartbeatRequest::type_name(),
             WebSocketMessage::WorkerHeartbeatResponse(_) => WorkerHeartbeatResponse::type_name(),

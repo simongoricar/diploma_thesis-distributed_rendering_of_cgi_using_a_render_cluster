@@ -8,7 +8,7 @@ use futures_channel::mpsc::UnboundedSender;
 use log::{error, info};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::jobs::BlenderJob;
-use shared::messages::queue::WorkerFrameQueueItemFinishedNotification;
+use shared::messages::queue::WorkerFrameQueueItemFinishedEvent;
 use shared::messages::traits::IntoWebSocketMessage;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -255,10 +255,9 @@ impl WorkerAutomaticQueue {
                 );
 
                 // Report back to master that we finished this frame.
-                let send_result =
-                    WorkerFrameQueueItemFinishedNotification::new(job_name, frame_index)
-                        .into_ws_message()
-                        .send(&message_sender);
+                let send_result = WorkerFrameQueueItemFinishedEvent::new(job_name, frame_index)
+                    .into_ws_message()
+                    .send(&message_sender);
 
                 if let Err(error) = send_result {
                     error!(

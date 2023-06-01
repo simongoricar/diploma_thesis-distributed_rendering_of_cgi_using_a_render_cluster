@@ -9,8 +9,10 @@ use miette::{miette, Context, IntoDiagnostic};
 use shared::jobs::BlenderJob;
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::state::ClusterManagerState;
+use crate::cluster::state::ClusterManagerState;
 use crate::worker::Worker;
+
+pub mod state;
 
 
 pub struct ClusterManager {

@@ -1,7 +1,5 @@
 pub mod cli;
-pub mod jobs;
-pub mod manager;
-pub mod state;
+pub mod cluster;
 pub mod worker;
 
 use clap::Parser;
@@ -10,7 +8,7 @@ use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::jobs::BlenderJob;
 
 use crate::cli::{CLIArgs, CLICommand};
-use crate::manager::ClusterManager;
+use crate::cluster::ClusterManager;
 
 #[tokio::main]
 async fn main() -> Result<()> {

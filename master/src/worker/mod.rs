@@ -20,10 +20,7 @@ use shared::messages::handshake::{
     WorkerHandshakeResponse,
 };
 use shared::messages::heartbeat::MasterHeartbeatRequest;
-use shared::messages::queue::{
-    MasterFrameQueueAddRequest,
-    WorkerFrameQueueItemFinishedNotification,
-};
+use shared::messages::queue::{MasterFrameQueueAddRequest, WorkerFrameQueueItemFinishedEvent};
 use shared::messages::traits::IntoWebSocketMessage;
 use shared::messages::{parse_websocket_message, receive_exact_message, WebSocketMessage};
 use tokio::net::TcpStream;
@@ -32,36 +29,50 @@ use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{accept_async, tungstenite, WebSocketStream};
 
-use crate::state::ClusterManagerState;
+use crate::cluster::state::ClusterManagerState;
 use crate::worker::event_dispatcher::WorkerEventDispatcher;
 use crate::worker::queue::{FrameOnWorker, WorkerQueue};
 
+/// State of the WebSocket connection with the worker.
 pub enum WorkerConnectionState {
     PendingHandshake,
     Connected,
 }
 
-
-
+/// Worker abstraction from the viewpoint of the master server.
 pub struct Worker {
+    /// IP address and port of the worker.
     pub address: SocketAddr,
 
+    /// Logger instance (so we can display logs with IP address, port and other context).
     pub logger: Arc<Logger>,
 
+    /// Reference to the `ClusterManager`'s state.
     pub cluster_state: Arc<ClusterManagerState>,
 
+    /// Unbounded async sender channel that can be used to send WebSocket messages to the worker.
     pub sender_channel: Arc<UnboundedSender<Message>>,
 
+    /// Status of the WebSocket connection with the worker.
     pub connection_state: WorkerConnectionState,
 
+    /// Event dispatcher for this worker. After the handshake is complete, this handles
+    /// all of the incoming requests/responses/events and distributes them through
+    /// distinct async channels.  
     pub event_dispatcher: Arc<WorkerEventDispatcher>,
 
+    /// Internal queue representation for this worker.
+    /// Likely to be slightly off sync with the actual worker (as WebSockets introduce minimal latency).
     pub queue: Arc<Mutex<WorkerQueue>>,
 
+    /// `JoinSet` that contains all the async tasks this worker has running.
     pub connection_tasks: JoinSet<Result<()>>,
 }
 
 impl Worker {
+    /// Given an established incoming `TcpStream`, turn the connection into
+    /// a WebSocket connection, perform our internal handshake and spawn tasks to run the connection
+    /// with this client and handle messages.
     pub async fn new_with_accept_and_handshake(
         stream: TcpStream,
         address: SocketAddr,
@@ -93,11 +104,15 @@ impl Worker {
      * Public methods
      */
 
+    /// Whether the worker has an empty queue
+    /// (as far as the representation on the master server is currently concerned, this might have some latency).
     pub async fn has_empty_queue(&self) -> bool {
         self.queue.lock().await.is_empty()
     }
 
+    /// Queue a frame onto the worker. This sends a WebSocket message.
     pub async fn queue_frame(&self, job: BlenderJob, frame_index: usize) -> Result<()> {
+        // TODO Wait for response.
         MasterFrameQueueAddRequest::new(job.clone(), frame_index)
             .into_ws_message()
             .send(&self.sender_channel)
@@ -115,6 +130,8 @@ impl Worker {
      * Private WebSocket accepting, handshaking and other connection code.
      */
 
+    /// Given a `TcpStream`, turn it into a proper WebSocket connection, perform the initial handshake
+    /// and spawn tasks to run this connection, including handling incoming requests/responses/events.
     async fn accept_ws_stream_and_initialize_tasks(
         stream: TcpStream,
         queue: Arc<Mutex<WorkerQueue>>,
@@ -125,6 +142,7 @@ impl Worker {
         Arc<WorkerEventDispatcher>,
         JoinSet<Result<()>>,
     )> {
+        // Initialize logger that will be distributed across this worker instance.
         let address = stream.peer_addr().into_diagnostic()?;
         let logger = Arc::new(Logger::new(format!(
             "[worker|{}:{}]",
@@ -132,6 +150,7 @@ impl Worker {
             address.port()
         )));
 
+        // Upgrades TcpStream to a WebSocket connection.
         logger.debug("Accepting TcpStream.");
         let ws_stream = accept_async(stream)
             .await
@@ -139,20 +158,26 @@ impl Worker {
             .wrap_err_with(|| miette!("Could not accept TcpStream."))?;
         logger.debug("TcpStream accepted.");
 
+        // Splits the stream and initializes unbounded message channels.
+
         let (ws_sink, ws_stream) = ws_stream.split();
 
         // To send messages through the WebSocket, send a Message instance through this unbounded channel.
         let (ws_sender_tx, ws_sender_rx) = futures_channel::mpsc::unbounded::<Message>();
-        // To see received messages, read this channel.
+        // To get incoming messages, read this channel.
         let (ws_receiver_tx, ws_receiver_rx) =
             futures_channel::mpsc::unbounded::<WebSocketMessage>();
 
         let sender_channel = Arc::new(ws_sender_tx);
         let receiver_channel = Arc::new(Mutex::new(ws_receiver_rx));
 
-
+        // The multiple async tasks that run this connection live on this `JoinSet`.
+        // Use this `JoinSet` to cancel or join all of the worker tasks.
         let mut worker_connection_future_set: JoinSet<Result<()>> = JoinSet::new();
 
+        // Spawn two tasks:
+        // - one that receives, parses and forwards the incoming WebSocket messages through a receiver channel and
+        // - one that reads the sender channel and forwards the messages through the WebSocket connection.
         let incoming_messages_handler = Self::forward_incoming_messages_through_channel(
             logger.clone(),
             ws_stream,
@@ -167,12 +192,16 @@ impl Worker {
         );
         worker_connection_future_set.spawn(outgoing_messages_handler);
 
+        // Perform our internal WebSocket handshake that exchanges, among other things, server and worker versions.
         let handshake_handle = worker_connection_future_set.spawn(Self::perform_handshake(
             logger.clone(),
             sender_channel.clone(),
             receiver_channel.clone(),
         ));
 
+        // Wait for handshake to complete, then initialize the event dispatcher
+        // that will consume the incoming WebSocket traffic for this worker from now on.
+        // *All incoming messages can now be received only through this multiplexing event dispatcher.*
         logger.debug("Waiting for handshake to complete.");
         worker_connection_future_set.join_next().await;
         if !handshake_handle.is_finished() {
@@ -194,6 +223,10 @@ impl Worker {
 
         let event_dispatcher_arc = Arc::new(event_dispatcher);
 
+        // Finally, spawn two final tasks:
+        // - one that maintains the heartbeat with the worker (it sends a heartbeat request every ~10 seconds and waits for the response) and
+        // - one that, finally, actually manages the incoming messages - things like requests/responses/notifications
+        //   and updates the master server's internal worker state if necessary.
         worker_connection_future_set.spawn(Self::maintain_heartbeat(
             logger.clone(),
             event_dispatcher_arc.clone(),
@@ -217,6 +250,13 @@ impl Worker {
         ))
     }
 
+    /// Perform our internal handshake over the given WebSocket.
+    /// This handshake consists of three messages:
+    ///  1. The master server must send a "handshake request".
+    ///  2. The worker must respond with a "handshake response".
+    ///  3. The master server must confirm with a "handshake response acknowledgement".
+    ///
+    /// After these three steps, the connection is considered to be established.
     async fn perform_handshake(
         logger: Arc<Logger>,
         sender_channel: Arc<UnboundedSender<Message>>,
@@ -251,6 +291,10 @@ impl Worker {
         Ok(())
     }
 
+    /// Read the WebSocket stream, parse messages and forward them through another unbounded async channel.
+    /// That channel is either in the hands of the handshaking method or the event dispatcher.
+    ///
+    /// Runs as long as `stream` can be read from or until an error happens while parsing the messages.
     async fn forward_incoming_messages_through_channel(
         logger: Arc<Logger>,
         stream: SplitStream<WebSocketStream<TcpStream>>,
@@ -290,6 +334,10 @@ impl Worker {
             .wrap_err_with(|| miette!("Failed to receive incoming WebSocket message."))
     }
 
+    /// Read from the unbounded async sending channel and forward the messages
+    /// through the WebSocket connection with the worker.
+    ///
+    /// Runs as long as the channel can be read from or as long as the WebSocket sink can be written to.
     async fn forward_queued_outgoing_messages_through_websocket(
         logger: Arc<Logger>,
         mut ws_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
@@ -313,6 +361,8 @@ impl Worker {
         }
     }
 
+    /// Waits for incoming messages and reacts according to their contents
+    /// (e.g. a "frame finished" event will update our internal queue to reflect that).
     async fn manage_incoming_messages(
         logger: Arc<Logger>,
         event_dispatcher: Arc<WorkerEventDispatcher>,
@@ -326,7 +376,7 @@ impl Worker {
         loop {
             tokio::select! {
                 notification = queue_item_finished_receiver.recv() => {
-                    let notification: WorkerFrameQueueItemFinishedNotification = notification.into_diagnostic()?;
+                    let notification: WorkerFrameQueueItemFinishedEvent = notification.into_diagnostic()?;
 
                     debug!(
                         "Received: Queue item finished, frame: {}",
@@ -345,6 +395,11 @@ impl Worker {
         }
     }
 
+    /// Maintain a heartbeat with the worker. Every 10 seconds, a heartbeat request is sent
+    /// and the worker is expected to respond to it in at most 5 seconds.
+    ///
+    /// Runs as long as the async sender channel can be written to
+    /// or until the worker doesn't respond to a heartbeat.
     async fn maintain_heartbeat(
         logger: Arc<Logger>,
         event_dispatcher: Arc<WorkerEventDispatcher>,
@@ -378,6 +433,9 @@ impl Worker {
     /*
      * Internal state management methods
      */
+
+    /// Updates the internal `Worker` and slightly more global `ClusterManagerState` state
+    /// to reflect the worker having finished its queued frame.
     async fn mark_frame_as_finished(
         job_name: String,
         frame_index: usize,

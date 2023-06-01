@@ -127,7 +127,7 @@ impl Worker {
     )> {
         let address = stream.peer_addr().into_diagnostic()?;
         let logger = Arc::new(Logger::new(format!(
-            "[{}:{}]",
+            "[worker|{}:{}]",
             address.ip(),
             address.port()
         )));

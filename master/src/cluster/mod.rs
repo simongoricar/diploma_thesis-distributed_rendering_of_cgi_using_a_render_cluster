@@ -10,7 +10,7 @@ use shared::jobs::BlenderJob;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::cluster::state::ClusterManagerState;
-use crate::worker::Worker;
+use crate::connection::Worker;
 
 pub mod state;
 

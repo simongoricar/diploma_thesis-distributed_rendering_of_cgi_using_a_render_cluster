@@ -6,7 +6,7 @@ use miette::Result;
 use shared::jobs::BlenderJob;
 use tokio::sync::Mutex;
 
-use crate::worker::Worker;
+use crate::connection::Worker;
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub enum FrameStatus {

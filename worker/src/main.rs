@@ -1,14 +1,15 @@
 mod cli;
-mod jobs;
-mod worker;
+mod connection;
+mod rendering;
+mod utilities;
 
 use clap::Parser;
 use log::info;
 use miette::{miette, Context, IntoDiagnostic, Result};
 
 use crate::cli::CLIArgs;
-use crate::jobs::BlenderJobRunner;
-use crate::worker::ClientWorker;
+use crate::connection::Worker;
+use crate::utilities::BlenderJobRunner;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,8 +17,10 @@ async fn main() -> Result<()> {
 
     let args = CLIArgs::parse();
 
+    let server_address = url::Url::parse("ws://127.0.0.1:9901").into_diagnostic()?;
+
     info!("Initializing ClientWorker.");
-    let client_worker = ClientWorker::connect()
+    let client_worker = Worker::connect(server_address)
         .await
         .wrap_err_with(|| miette!("Could not connect to master server."))?;
 

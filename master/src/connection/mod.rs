@@ -30,8 +30,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{accept_async, tungstenite, WebSocketStream};
 
 use crate::cluster::state::ClusterManagerState;
-use crate::worker::event_dispatcher::WorkerEventDispatcher;
-use crate::worker::queue::{FrameOnWorker, WorkerQueue};
+use crate::connection::event_dispatcher::WorkerEventDispatcher;
+use crate::connection::queue::{FrameOnWorker, WorkerQueue};
 
 /// State of the WebSocket connection with the worker.
 pub enum WorkerConnectionState {

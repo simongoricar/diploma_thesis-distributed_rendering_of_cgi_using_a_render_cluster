@@ -10,30 +10,25 @@ use shared::messages::queue::{MasterFrameQueueAddRequest, MasterFrameQueueRemove
 use shared::messages::WebSocketMessage;
 use tokio::sync::broadcast;
 
+/// Manages all incoming WebSocket messages from the master server.
 pub struct MasterEventDispatcher {
+    /// `tokio`'s broadcast `Sender`. `subscribe()` to receive heartbeat requests.
     heartbeat_request_sender: Arc<broadcast::Sender<MasterHeartbeatRequest>>,
 
-    #[allow(dead_code)]
-    heartbeat_request_receiver: broadcast::Receiver<MasterHeartbeatRequest>,
-
+    /// `tokio`'s broadcast `Sender`. `subscribe()` to receive queue item add requests.
     queue_frame_add_request_sender: Arc<broadcast::Sender<MasterFrameQueueAddRequest>>,
 
-    #[allow(dead_code)]
-    queue_frame_add_request_receiver: broadcast::Receiver<MasterFrameQueueAddRequest>,
-
+    /// `tokio`'s broadcast `Sender`. `subscribe()` to receive queue item remove requests.
     queue_frame_remove_request_sender: Arc<broadcast::Sender<MasterFrameQueueRemoveRequest>>,
-
-    #[allow(dead_code)]
-    queue_frame_remove_request_receiver: broadcast::Receiver<MasterFrameQueueRemoveRequest>,
 }
 
 impl MasterEventDispatcher {
+    /// Initialize a new `MasterEventDispatcher`, consuming the WebSocket connection's
+    /// async receiver channel.
     pub async fn new(receiver_channel: UnboundedReceiver<WebSocketMessage>) -> Self {
-        let (heartbeat_request_tx, heartbeat_request_rx) =
-            broadcast::channel::<MasterHeartbeatRequest>(512);
-        let (queue_frame_add_request_tx, queue_frame_add_request_rx) =
-            broadcast::channel::<MasterFrameQueueAddRequest>(512);
-        let (queue_frame_remove_request_tx, queue_frame_remove_request_rx) =
+        let (heartbeat_request_tx, _) = broadcast::channel::<MasterHeartbeatRequest>(512);
+        let (queue_frame_add_request_tx, _) = broadcast::channel::<MasterFrameQueueAddRequest>(512);
+        let (queue_frame_remove_request_tx, _) =
             broadcast::channel::<MasterFrameQueueRemoveRequest>(512);
 
         let heartbeat_request_tx_arc = Arc::new(heartbeat_request_tx);
@@ -49,14 +44,13 @@ impl MasterEventDispatcher {
 
         Self {
             heartbeat_request_sender: heartbeat_request_tx_arc,
-            heartbeat_request_receiver: heartbeat_request_rx,
             queue_frame_add_request_sender: queue_frame_add_request_tx_arc,
-            queue_frame_add_request_receiver: queue_frame_add_request_rx,
             queue_frame_remove_request_sender: queue_frame_remove_request_tx_arc,
-            queue_frame_remove_request_receiver: queue_frame_remove_request_rx,
         }
     }
 
+    /// Run the event dispatcher indefinitely, reading the incoming WebSocket messages
+    /// and broadcasting the to subscribed `tokio::broadcast::Receiver`s.
     async fn run(
         heartbeat_request_event_sender: Arc<broadcast::Sender<MasterHeartbeatRequest>>,
         queue_frame_add_request_event_sender: Arc<broadcast::Sender<MasterFrameQueueAddRequest>>,
@@ -76,21 +70,18 @@ impl MasterEventDispatcher {
                 }
             };
 
+            // We ignore the errors when `.send`-ing because the only reason `send` can fail
+            // is when there are no receivers. We don't want to propagate such an error
+            // (as it really isn't an error, it's just that no-one will see that message as no-one is subscribed).
             match next_message {
                 WebSocketMessage::MasterHeartbeatRequest(request) => {
-                    heartbeat_request_event_sender
-                        .send(request)
-                        .expect("Could not send heartbeat request event.");
+                    let _ = heartbeat_request_event_sender.send(request);
                 }
                 WebSocketMessage::MasterFrameQueueAddRequest(request) => {
-                    queue_frame_add_request_event_sender
-                        .send(request)
-                        .expect("Could not send frame queue add request event.");
+                    let _ = queue_frame_add_request_event_sender.send(request);
                 }
                 WebSocketMessage::MasterFrameQueueRemoveRequest(request) => {
-                    queue_frame_remove_request_event_sender
-                        .send(request)
-                        .expect("Could not send frame queue remove request event.");
+                    let _ = queue_frame_remove_request_event_sender.send(request);
                 }
                 _ => {
                     warn!("MasterEventDispatcher: Unexpected (but valid) incoming WebSocket message: {}", next_message.type_name());
@@ -103,16 +94,19 @@ impl MasterEventDispatcher {
      * Public event channel methods
      */
 
+    /// Get a `Receiver` for future heartbeat requests from the master server.
     pub fn heartbeat_request_receiver(&self) -> broadcast::Receiver<MasterHeartbeatRequest> {
         self.heartbeat_request_sender.subscribe()
     }
 
+    /// Get a `Receiver` for future "queue item add" requests from the master server.
     pub fn frame_queue_add_request_receiver(
         &self,
     ) -> broadcast::Receiver<MasterFrameQueueAddRequest> {
         self.queue_frame_add_request_sender.subscribe()
     }
 
+    /// Get a `Receiver` for future "queue item remove" requests from the master server.
     pub fn frame_queue_remove_request_receiver(
         &self,
     ) -> broadcast::Receiver<MasterFrameQueueRemoveRequest> {
@@ -123,6 +117,10 @@ impl MasterEventDispatcher {
      * One-shot async event methods
      */
 
+    /// One-shot event method that completes when we either receive a heartbeat request
+    /// or we time out (see `timeout`), whichever is sooner.
+    ///
+    /// If timed out, `Err` is returned.
     #[allow(dead_code)]
     pub async fn wait_for_heartbeat_request(
         &self,
@@ -145,6 +143,10 @@ impl MasterEventDispatcher {
         }
     }
 
+    /// One-shot event method that completes when we either receive a queue item adding request
+    /// or we time out (see `timeout`), whichever is sooner.
+    ///
+    /// If timed out, `Err` is returned.
     #[allow(dead_code)]
     pub async fn wait_for_queue_add_request(
         &self,
@@ -167,6 +169,10 @@ impl MasterEventDispatcher {
         }
     }
 
+    /// One-shot event method that completes when we either receive a queue item removal request
+    /// or we time out (see `timeout`), whichever is sooner.
+    ///
+    /// If timed out, `Err` is returned.
     #[allow(dead_code)]
     pub async fn wait_for_queue_remove_request(
         &self,

@@ -23,12 +23,15 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, tungstenite, MaybeTlsStream, WebSocketStream};
+use url::Url;
 
-use crate::jobs::{BlenderJobRunner, WorkerAutomaticQueue};
-use crate::worker::event_dispatcher::MasterEventDispatcher;
+use crate::connection::event_dispatcher::MasterEventDispatcher;
+use crate::utilities::{BlenderJobRunner, WorkerAutomaticQueue};
 
 
-pub struct ClientWorker {
+/// Worker instance. Manages the connection with the master server, receives requests
+/// and performs the rendering as instructed.
+pub struct Worker {
     ws_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
     ws_stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 
@@ -39,12 +42,13 @@ pub struct ClientWorker {
     receiver_rx: UnboundedReceiver<WebSocketMessage>,
 }
 
-impl ClientWorker {
-    pub async fn connect() -> Result<Self> {
-        let server_address = url::Url::parse("ws://127.0.0.1:9901").into_diagnostic()?;
+impl Worker {
+    /// Connect to the master server
+    pub async fn connect(master_server_url: Url) -> Result<Self> {
+        let (stream, _) = connect_async(master_server_url).await.into_diagnostic()?;
 
-        let (stream, _) = connect_async(server_address).await.into_diagnostic()?;
-
+        // Split the WebSocket stream and prepare async channels, but don't actually perform the handshake and other stuff yet.
+        // See `run_forever` for running the worker.
         let (ws_write, ws_read) = stream.split();
 
         let (ws_sender_tx, ws_sender_rx) = futures_channel::mpsc::unbounded::<Message>();
@@ -61,6 +65,11 @@ impl ClientWorker {
         })
     }
 
+    /// This performs the initial handshake with the master server, then runs the worker,
+    /// spawning several async tasks that receive, send and parse messages.
+    ///
+    /// Whenever a frame is queued, we render it and respond with the item finished event
+    /// (but only one frame at a time).
     pub async fn run_forever(self, blender_runner: BlenderJobRunner) -> Result<()> {
         let sender_channel = Arc::new(self.sender_tx);
         let receiver_channel = Arc::new(Mutex::new(self.receiver_rx));
@@ -121,6 +130,8 @@ impl ClientWorker {
         Ok(())
     }
 
+    /// Performs our internal WebSocket handshake
+    /// (master handshake request, worker response, master acknowledgement).
     async fn perform_handshake(
         sender_channel: Arc<UnboundedSender<Message>>,
         receiver_channel: Arc<Mutex<UnboundedReceiver<WebSocketMessage>>>,
@@ -165,6 +176,10 @@ impl ClientWorker {
         Ok(())
     }
 
+    /// Read from the unbounded async sending channel and forward the messages
+    /// through the WebSocket connection with the master server.
+    ///
+    /// Runs as long as the channel can be read from or as long as the WebSocket sink can be written to.
     async fn forward_queued_outgoing_messages_through_websocket(
         mut ws_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
         mut message_send_queue: UnboundedReceiver<Message>,
@@ -185,6 +200,10 @@ impl ClientWorker {
         }
     }
 
+    /// Read the WebSocket stream, parse messages and forward them through another unbounded async channel.
+    /// That channel is either in the hands of the handshaking method or the event dispatcher.
+    ///
+    /// Runs as long as `stream` can be read from or until an error happens while parsing the messages.
     async fn forward_incoming_messages_through_channel(
         ws_stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         message_sender_channel: UnboundedSender<WebSocketMessage>,
@@ -223,6 +242,9 @@ impl ClientWorker {
             .wrap_err_with(|| miette!("Failed to receive incoming WebSocket message."))
     }
 
+    /// Listen for heartbeat requests from the master server and respond to them.
+    ///
+    /// Runs as long as the async sender channel can be written to.
     async fn respond_to_heartbeats(
         event_dispatcher: Arc<MasterEventDispatcher>,
         sender_channel: Arc<UnboundedSender<Message>>,
@@ -249,6 +271,11 @@ impl ClientWorker {
         }
     }
 
+    /// Waits for incoming requests and reacts to them
+    /// (e.g. a "add frame to queue" request will update our frame queue and,
+    /// if previously idle, start rendering).
+    ///
+    /// Runs as long as the event dispatcher's `Receiver`s can be read from.
     async fn manage_incoming_messages(
         blender_runner: BlenderJobRunner,
         event_dispatcher: Arc<MasterEventDispatcher>,

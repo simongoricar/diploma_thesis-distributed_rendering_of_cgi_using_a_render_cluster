@@ -1,6 +1,6 @@
 pub mod cli;
 pub mod cluster;
-pub mod worker;
+pub mod connection;
 
 use clap::Parser;
 use log::info;

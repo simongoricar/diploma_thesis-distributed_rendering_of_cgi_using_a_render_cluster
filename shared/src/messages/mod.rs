@@ -89,7 +89,7 @@ impl WebSocketMessage {
                 Ok(ws_message)
             }
             tungstenite::Message::Binary(_) => {
-                todo!("Not implemented, need to handle binary websocket messages.");
+                todo!("Not implemented, we don't handle binary websocket messages.");
             }
             _ => Err(miette!("Invalid WebSocket message type.")),
         }

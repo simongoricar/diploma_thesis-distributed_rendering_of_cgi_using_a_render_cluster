@@ -77,7 +77,6 @@ impl Worker {
             )
             .await?;
 
-        // TODO Integrate queue
         Ok(Self {
             address,
             logger,
@@ -111,8 +110,6 @@ impl Worker {
 
         Ok(())
     }
-
-    // TODO
 
     /*
      * Private WebSocket accepting, handshaking and other connection code.

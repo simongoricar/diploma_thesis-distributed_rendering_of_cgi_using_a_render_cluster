@@ -85,8 +85,6 @@ impl ClusterManager {
     }
 
     async fn wait_for_readiness_and_complete_job(&self) -> Result<()> {
-        // TODO Rewrite this with new Worker abstraction.
-
         info!(
             "Waiting for at least {} workers to connect before starting job.",
             self.job.wait_for_number_of_workers

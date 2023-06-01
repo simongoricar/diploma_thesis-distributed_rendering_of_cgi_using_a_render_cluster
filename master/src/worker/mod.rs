@@ -10,14 +10,20 @@ use std::time::{Duration, Instant};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt, TryStreamExt};
-use log::{debug, info};
+use log::debug;
 use miette::{miette, Context, IntoDiagnostic, Result};
+use shared::jobs::BlenderJob;
+use shared::logger::Logger;
 use shared::messages::handshake::{
     MasterHandshakeAcknowledgement,
     MasterHandshakeRequest,
     WorkerHandshakeResponse,
 };
 use shared::messages::heartbeat::MasterHeartbeatRequest;
+use shared::messages::queue::{
+    MasterFrameQueueAddRequest,
+    WorkerFrameQueueItemFinishedNotification,
+};
 use shared::messages::traits::IntoWebSocketMessage;
 use shared::messages::{traits, WebSocketMessage};
 use tokio::net::TcpStream;
@@ -26,8 +32,9 @@ use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{accept_async, tungstenite, WebSocketStream};
 
-use crate::websockets::worker::event_dispatcher::WorkerEventDispatcher;
-use crate::websockets::worker::queue::WorkerQueue;
+use crate::state::ClusterManagerState;
+use crate::worker::event_dispatcher::WorkerEventDispatcher;
+use crate::worker::queue::{FrameOnWorker, WorkerQueue};
 
 pub enum WorkerConnectionState {
     PendingHandshake,
@@ -61,6 +68,10 @@ async fn receive_exact_message<M: traits::Message + TryFrom<WebSocketMessage>>(
 pub struct Worker {
     pub address: SocketAddr,
 
+    pub logger: Arc<Logger>,
+
+    pub cluster_state: Arc<ClusterManagerState>,
+
     pub sender_channel: Arc<UnboundedSender<Message>>,
 
     pub connection_state: WorkerConnectionState,
@@ -76,15 +87,23 @@ impl Worker {
     pub async fn new_with_accept_and_handshake(
         stream: TcpStream,
         address: SocketAddr,
+        cluster_state: Arc<ClusterManagerState>,
     ) -> Result<Self> {
         let queue = Arc::new(Mutex::new(WorkerQueue::new()));
 
-        let (message_sender_channel, event_dispatcher, connection_tasks) =
-            Self::accept_ws_stream_and_initialize_tasks(stream, queue.clone()).await?;
+        let (logger, message_sender_channel, event_dispatcher, connection_tasks) =
+            Self::accept_ws_stream_and_initialize_tasks(
+                stream,
+                queue.clone(),
+                cluster_state.clone(),
+            )
+            .await?;
 
         // TODO Integrate queue
         Ok(Self {
             address,
+            logger,
+            cluster_state,
             sender_channel: message_sender_channel,
             connection_state: WorkerConnectionState::Connected,
             event_dispatcher,
@@ -97,6 +116,24 @@ impl Worker {
      * Public methods
      */
 
+    pub async fn has_empty_queue(&self) -> bool {
+        self.queue.lock().await.is_empty()
+    }
+
+    pub async fn queue_frame(&self, job: BlenderJob, frame_index: usize) -> Result<()> {
+        MasterFrameQueueAddRequest::new(job.clone(), frame_index)
+            .into_ws_message()
+            .send(&self.sender_channel)
+            .wrap_err_with(|| miette!("Could not send frame queue add request to worker."))?;
+
+        self.queue
+            .lock()
+            .await
+            .add(FrameOnWorker::new(job, frame_index));
+
+        Ok(())
+    }
+
     // TODO
 
     /*
@@ -106,16 +143,22 @@ impl Worker {
     async fn accept_ws_stream_and_initialize_tasks(
         stream: TcpStream,
         queue: Arc<Mutex<WorkerQueue>>,
+        cluster_state: Arc<ClusterManagerState>,
     ) -> Result<(
+        Arc<Logger>,
         Arc<UnboundedSender<Message>>,
         Arc<WorkerEventDispatcher>,
         JoinSet<Result<()>>,
     )> {
         let address = stream.peer_addr().into_diagnostic()?;
+        let logger = Arc::new(Logger::new(format!("[{}]", address.ip())));
+
+        logger.debug("Accepting TcpStream.");
         let ws_stream = accept_async(stream)
             .await
             .into_diagnostic()
             .wrap_err_with(|| miette!("Could not accept TcpStream."))?;
+        logger.debug("TcpStream accepted.");
 
         let (ws_sink, ws_stream) = ws_stream.split();
 
@@ -131,20 +174,27 @@ impl Worker {
 
         let mut worker_connection_future_set: JoinSet<Result<()>> = JoinSet::new();
 
-        let incoming_messages_handler =
-            Self::forward_incoming_messages_through_channel(ws_stream, ws_receiver_tx);
+        let incoming_messages_handler = Self::forward_incoming_messages_through_channel(
+            logger.clone(),
+            ws_stream,
+            ws_receiver_tx,
+        );
         worker_connection_future_set.spawn(incoming_messages_handler);
 
-        let outgoing_messages_handler =
-            Self::forward_queued_outgoing_messages_through_websocket(ws_sink, ws_sender_rx);
+        let outgoing_messages_handler = Self::forward_queued_outgoing_messages_through_websocket(
+            logger.clone(),
+            ws_sink,
+            ws_sender_rx,
+        );
         worker_connection_future_set.spawn(outgoing_messages_handler);
 
         let handshake_handle = worker_connection_future_set.spawn(Self::perform_handshake(
-            address,
+            logger.clone(),
             sender_channel.clone(),
             receiver_channel.clone(),
         ));
 
+        logger.debug("Waiting for handshake to complete.");
         worker_connection_future_set.join_next().await;
         if !handshake_handle.is_finished() {
             return Err(miette!("BUG: Incorrect task completed."));
@@ -163,16 +213,22 @@ impl Worker {
         let event_dispatcher_arc = Arc::new(event_dispatcher);
 
         worker_connection_future_set.spawn(Self::maintain_heartbeat(
+            logger.clone(),
             event_dispatcher_arc.clone(),
             sender_channel.clone(),
         ));
 
         worker_connection_future_set.spawn(Self::manage_incoming_messages(
+            logger.clone(),
             event_dispatcher_arc.clone(),
             queue,
+            cluster_state,
         ));
 
+        logger.info("Worker connection fully established.");
+
         Ok((
+            logger,
             sender_channel,
             event_dispatcher_arc,
             worker_connection_future_set,
@@ -180,11 +236,11 @@ impl Worker {
     }
 
     async fn perform_handshake(
-        worker_address: SocketAddr,
+        logger: Arc<Logger>,
         sender_channel: Arc<UnboundedSender<Message>>,
         receiver_channel: Arc<Mutex<UnboundedReceiver<WebSocketMessage>>>,
     ) -> Result<()> {
-        info!("[{worker_address:?}] Sending handshake request.");
+        logger.debug("Sending handshake request.");
 
         MasterHandshakeRequest::new("1.0.0")
             .into_ws_message()
@@ -198,25 +254,28 @@ impl Worker {
                 .wrap_err_with(|| miette!("Invalid message: expected worker handshake response!"))?
         };
 
-        info!(
-            "[{worker_address:?}] Got handshake response from worker: worker_version={}. Sending acknowledgement.",
-            response.worker_version
-        );
+        logger.info(format!(
+            "Got handshake response from worker. worker_version={}, sending acknowledgement.",
+            response.worker_version,
+        ));
 
         MasterHandshakeAcknowledgement::new(true)
             .into_ws_message()
             .send(&sender_channel)
             .wrap_err_with(|| miette!("Could not send handshake acknowledgement."))?;
 
-        info!("[{worker_address:?}] Handshake has been completed.");
+        logger.info("Handshake has been completed.");
 
         Ok(())
     }
 
     async fn forward_incoming_messages_through_channel(
+        logger: Arc<Logger>,
         stream: SplitStream<WebSocketStream<TcpStream>>,
         message_sender_channel: UnboundedSender<WebSocketMessage>,
     ) -> Result<()> {
+        logger.debug("Running task loop: receiving, parsing and forwarding incoming messages.");
+
         stream
             .try_for_each(|ws_message| async {
                 let message = match parse_websocket_message(ws_message) {
@@ -250,9 +309,14 @@ impl Worker {
     }
 
     async fn forward_queued_outgoing_messages_through_websocket(
+        logger: Arc<Logger>,
         mut ws_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
         mut message_send_queue_receiver: UnboundedReceiver<Message>,
     ) -> Result<()> {
+        logger.debug(
+            "Running task loop: forwarding messages from channel through WebSocket connection.",
+        );
+
         loop {
             let next_outgoing_message = message_send_queue_receiver
                 .next()
@@ -268,45 +332,84 @@ impl Worker {
     }
 
     async fn manage_incoming_messages(
+        logger: Arc<Logger>,
         event_dispatcher: Arc<WorkerEventDispatcher>,
         queue: Arc<Mutex<WorkerQueue>>,
+        cluster_state: Arc<ClusterManagerState>,
     ) -> Result<()> {
-        info!("Running incoming messages parsing loop");
+        logger.debug("Running task loop: handling incoming messages.");
 
-        // TODO parse incoming queue item finished messages, etc.
-        //      When a queue item is finished, update the internal `queue`.
+        let mut queue_item_finished_receiver = event_dispatcher.queue_item_finished_receiver();
 
-        Ok(())
+        loop {
+            tokio::select! {
+                notification = queue_item_finished_receiver.recv() => {
+                    let notification: WorkerFrameQueueItemFinishedNotification = notification.into_diagnostic()?;
+
+                    debug!("Received: Queue item finished, frame: {}", notification.frame_index);
+                    Self::mark_frame_as_finished(
+                        notification.job_name,
+                        notification.frame_index,
+                        logger.clone(),
+                        queue.clone(),
+                        cluster_state.clone()
+                    ).await?;
+                }
+            }
+        }
     }
 
     async fn maintain_heartbeat(
+        logger: Arc<Logger>,
         event_dispatcher: Arc<WorkerEventDispatcher>,
         sender_channel: Arc<UnboundedSender<Message>>,
     ) -> Result<()> {
-        info!("Running heartbeat loop.");
+        logger.debug("Running task loop: heartbeats.");
 
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
 
-            debug!("Sending heartbeat request to worker.");
+            logger.debug("Sending heartbeat request to worker.");
             MasterHeartbeatRequest::new()
                 .into_ws_message()
                 .send(&sender_channel)
                 .wrap_err_with(|| miette!("Could not send heartbeat request."))?;
 
-
             let time_heartbeat_wait_start = Instant::now();
-
             event_dispatcher
                 .wait_for_heartbeat_response(Duration::from_secs(5))
                 .await
                 .wrap_err_with(|| miette!("Worker did not respond to heartbeat."))?;
 
             let time_heartbeat_wait_latency = time_heartbeat_wait_start.elapsed();
-            debug!(
-                "Worker responded to heartbeat in {:.4} seconds.",
-                time_heartbeat_wait_latency.as_secs_f64()
-            );
+            logger.debug(format!(
+                "Worker responded to heartbeat request in {:.4} seconds.",
+                time_heartbeat_wait_latency.as_secs_f64(),
+            ));
         }
+    }
+
+    /*
+     * Internal state management methods
+     */
+    async fn mark_frame_as_finished(
+        job_name: String,
+        frame_index: usize,
+        logger: Arc<Logger>,
+        queue: Arc<Mutex<WorkerQueue>>,
+        cluster_state: Arc<ClusterManagerState>,
+    ) -> Result<()> {
+        {
+            let mut locked_queue = queue.lock().await;
+            logger.trace("Removing frame from master's internal worker state.");
+            locked_queue.remove(job_name, frame_index)?
+        }
+
+        {
+            logger.trace("Marking frame as finished in master's full state.");
+            cluster_state.mark_frame_as_finished(frame_index).await?;
+        }
+
+        Ok(())
     }
 }

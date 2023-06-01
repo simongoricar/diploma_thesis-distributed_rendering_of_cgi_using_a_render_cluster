@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
 use log::{info, warn};
 use miette::{miette, IntoDiagnostic};
@@ -10,7 +10,6 @@ use shared::messages::heartbeat::WorkerHeartbeatResponse;
 use shared::messages::queue::WorkerFrameQueueItemFinishedNotification;
 use shared::messages::WebSocketMessage;
 use tokio::sync::broadcast;
-use tokio_tungstenite::tungstenite::Message;
 
 
 #[deprecated]
@@ -23,9 +22,13 @@ pub enum WorkerEventType {
 
 pub struct WorkerEventDispatcher {
     heartbeat_response_sender: Arc<broadcast::Sender<WorkerHeartbeatResponse>>,
+
+    #[allow(dead_code)]
     heartbeat_response_receiver: broadcast::Receiver<WorkerHeartbeatResponse>,
 
     queue_item_finished_sender: Arc<broadcast::Sender<WorkerFrameQueueItemFinishedNotification>>,
+
+    #[allow(dead_code)]
     queue_item_finished_receiver: broadcast::Receiver<WorkerFrameQueueItemFinishedNotification>,
 }
 

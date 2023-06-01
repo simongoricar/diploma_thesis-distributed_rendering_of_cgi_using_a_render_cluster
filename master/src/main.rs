@@ -1,7 +1,8 @@
 pub mod cli;
 pub mod jobs;
 pub mod manager;
-pub mod websockets;
+pub mod state;
+pub mod worker;
 
 use clap::Parser;
 use log::info;
@@ -21,20 +22,18 @@ async fn main() -> Result<()> {
     if let CLICommand::RunJob(run_job_args) = args.command {
         info!("Loading job file.");
         let job = BlenderJob::load_from_file(run_job_args.job_file_path)
-            .wrap_err_with(|| {
-                miette!("Could not load Blender job from file.")
-            })?;
+            .wrap_err_with(|| miette!("Could not load Blender job from file."))?;
 
         info!("Initializing cluster manager.");
-        let mut manager =
-            ClusterManager::new_from_job(job).await.wrap_err_with(|| {
-                miette!("Could not initialize cluster manager.")
-            })?;
+        let mut manager = ClusterManager::new_from_job(job)
+            .await
+            .wrap_err_with(|| miette!("Could not initialize cluster manager."))?;
 
         info!("Running server to job completion.");
-        manager.run_job_to_completion().await.wrap_err_with(|| {
-            miette!("Could not run server and job to completion.")
-        })?;
+        manager
+            .run_job_to_completion()
+            .await
+            .wrap_err_with(|| miette!("Could not run server and job to completion."))?;
     }
 
     Ok(())

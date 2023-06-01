@@ -129,7 +129,11 @@ impl Worker {
         JoinSet<Result<()>>,
     )> {
         let address = stream.peer_addr().into_diagnostic()?;
-        let logger = Arc::new(Logger::new(format!("[{}]", address.ip())));
+        let logger = Arc::new(Logger::new(format!(
+            "[{}:{}]",
+            address.ip(),
+            address.port()
+        )));
 
         logger.debug("Accepting TcpStream.");
         let ws_stream = accept_async(stream)

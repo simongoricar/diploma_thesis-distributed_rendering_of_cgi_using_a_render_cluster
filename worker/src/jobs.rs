@@ -9,25 +9,20 @@ use log::{error, info};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::jobs::BlenderJob;
 use shared::messages::queue::WorkerFrameQueueItemFinishedNotification;
-use shared::messages::WebSocketMessage;
+use shared::messages::traits::IntoWebSocketMessage;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite;
 
-pub fn parse_with_base_directory_prefix(
-    path: &str,
-    base: Option<&PathBuf>,
-) -> Result<PathBuf> {
+pub fn parse_with_base_directory_prefix(path: &str, base: Option<&PathBuf>) -> Result<PathBuf> {
     if path.starts_with("%BASE%") {
         if base.is_none() {
             return Err(miette!("Missing base!"));
         }
 
-        let prefixless_path =
-            path.strip_prefix("%BASE%").expect("BUG: Missing prefix.");
-        let prefixless_path =
-            prefixless_path.strip_prefix('/').unwrap_or(prefixless_path);
+        let prefixless_path = path.strip_prefix("%BASE%").expect("BUG: Missing prefix.");
+        let prefixless_path = prefixless_path.strip_prefix('/').unwrap_or(prefixless_path);
         let prefixless_path = prefixless_path
             .strip_prefix('\\')
             .unwrap_or(prefixless_path);
@@ -44,10 +39,7 @@ pub struct BlenderJobRunner {
 }
 
 impl BlenderJobRunner {
-    pub fn new(
-        blender_binary_path: PathBuf,
-        base_directory_path: PathBuf,
-    ) -> Result<Self> {
+    pub fn new(blender_binary_path: PathBuf, base_directory_path: PathBuf) -> Result<Self> {
         if !blender_binary_path.is_file() {
             return Err(miette!("Provided Blender path is not a file."));
         }
@@ -64,11 +56,7 @@ impl BlenderJobRunner {
         })
     }
 
-    pub async fn render_frame(
-        &self,
-        job: BlenderJob,
-        frame_index: usize,
-    ) -> Result<()> {
+    pub async fn render_frame(&self, job: BlenderJob, frame_index: usize) -> Result<()> {
         /*
          * Parse path to .blend project file
          */
@@ -85,8 +73,7 @@ impl BlenderJobRunner {
             ));
         }
 
-        let blender_file_path_str =
-            blender_file_path.to_string_lossy().to_string();
+        let blender_file_path_str = blender_file_path.to_string_lossy().to_string();
 
         /*
          * Parse output file
@@ -100,9 +87,7 @@ impl BlenderJobRunner {
             if !output_directory.is_dir() {
                 create_dir_all(&output_directory)
                     .into_diagnostic()
-                    .wrap_err_with(|| {
-                        miette!("Could not create missing directories.")
-                    })?;
+                    .wrap_err_with(|| miette!("Could not create missing directories."))?;
             }
 
             let mut output_path = output_directory.to_string_lossy().to_string();
@@ -129,9 +114,7 @@ impl BlenderJobRunner {
             .output()
             .await
             .into_diagnostic()
-            .wrap_err_with(|| {
-                miette!("Failed while executing Blender binary.")
-            })?;
+            .wrap_err_with(|| miette!("Failed while executing Blender binary."))?;
 
         let render_duration = time_render_start.elapsed();
 
@@ -205,36 +188,38 @@ impl WorkerAutomaticQueue {
         let is_currently_running = Arc::new(AtomicBool::new(false));
 
         loop {
-            // TODO
-            if !is_currently_running.load(Ordering::SeqCst) {
-                let mut locked_frames = frames.lock().await;
+            tokio::time::sleep(Duration::from_millis(25)).await;
 
-                let pending_frame = locked_frames
-                    .iter_mut()
-                    .find(|frame| frame.state == WorkerFrameState::Queued);
-                if let Some(frame) = pending_frame {
-                    if !is_currently_running.load(Ordering::SeqCst) {
-                        info!(
-                            "Spawning new frame renderer: {}, frame {}",
-                            frame.job.job_name, frame.frame_index
-                        );
+            if is_currently_running.load(Ordering::SeqCst) {
+                continue;
+            }
 
-                        is_currently_running.store(true, Ordering::SeqCst);
-                        tokio::spawn(
-                            Self::render_frame_and_report_through_websocket(
-                                runner.clone(),
-                                message_sender.clone(),
-                                is_currently_running.clone(),
-                                frames.clone(),
-                                frame.job.clone(),
-                                frame.frame_index,
-                            ),
-                        );
-                    }
+            let mut locked_frames = frames.lock().await;
+
+            let pending_frame = locked_frames
+                .iter_mut()
+                .find(|frame| frame.state == WorkerFrameState::Queued);
+
+            if let Some(frame) = pending_frame {
+                if !is_currently_running.load(Ordering::SeqCst) {
+                    info!(
+                        "Spawning new frame renderer: {}, frame {}",
+                        frame.job.job_name, frame.frame_index
+                    );
+
+                    is_currently_running.store(true, Ordering::SeqCst);
+                    tokio::spawn(Self::render_frame_and_report_through_websocket(
+                        runner.clone(),
+                        message_sender.clone(),
+                        is_currently_running.clone(),
+                        frames.clone(),
+                        frame.job.clone(),
+                        frame.frame_index,
+                    ));
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs_f64(0.5f64)).await;
+            drop(locked_frames);
         }
     }
 
@@ -255,9 +240,7 @@ impl WorkerAutomaticQueue {
 
             let our_frame = frames_locked
                 .iter_mut()
-                .find(|frame| {
-                    frame.job == job && frame.frame_index == frame_index
-                })
+                .find(|frame| frame.job == job && frame.frame_index == frame_index)
                 .expect("BUG: No such frame.");
 
             our_frame.state = WorkerFrameState::Rendering;
@@ -272,14 +255,12 @@ impl WorkerAutomaticQueue {
                 );
 
                 // Report back to master that we finished this frame.
-                let item_finished_message: WebSocketMessage =
-                    WorkerFrameQueueItemFinishedNotification::new(
-                        job_name,
-                        frame_index,
-                    )
-                    .into();
+                let send_result =
+                    WorkerFrameQueueItemFinishedNotification::new(job_name, frame_index)
+                        .into_ws_message()
+                        .send(&message_sender);
 
-                if let Err(error) = item_finished_message.send(&message_sender) {
+                if let Err(error) = send_result {
                     error!(
                         "Errored while sending item finished notification: {}",
                         error
@@ -296,9 +277,7 @@ impl WorkerAutomaticQueue {
 
             let our_frame_index = frames_locked
                 .iter_mut()
-                .position(|frame| {
-                    frame.job == job && frame.frame_index == frame_index
-                })
+                .position(|frame| frame.job == job && frame.frame_index == frame_index)
                 .expect("BUG: No such frame.");
             frames_locked.remove(our_frame_index);
         }
@@ -321,8 +300,7 @@ impl WorkerAutomaticQueue {
 
         // FIXME This could potentially un-queue frames that have already started.
 
-        locked_frames_vec.retain(|frame| {
-            frame.job.job_name != job_name || frame.frame_index != frame_index
-        });
+        locked_frames_vec
+            .retain(|frame| frame.job.job_name != job_name || frame.frame_index != frame_index);
     }
 }

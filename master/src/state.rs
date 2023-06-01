@@ -67,7 +67,7 @@ impl ClusterManagerState {
             }
         }
 
-        return true;
+        true
     }
 
     pub async fn mark_frame_as_queued_on_worker(

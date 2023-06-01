@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::try_join;
-use log::{debug, info};
+use log::{debug, info, trace};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
 use shared::jobs::BlenderJob;
@@ -121,17 +121,22 @@ impl ClusterManager {
         );
 
         loop {
-            if self.state.next_pending_frame().await.is_none()
-                && self.state.all_frames_finished().await
-            {
+            trace!("Checking if all frames have been finished.");
+            if self.state.all_frames_finished().await {
                 info!("All frames have been finished!");
                 return Ok(());
             }
 
             // Queue frames onto worker that don't have any queued frames yet.
+            trace!("Locking worker list and distributing pending frames.");
             let mut workers_locked = self.state.workers.lock().await;
             for worker in workers_locked.values_mut() {
-                if !worker.has_empty_queue().await {
+                if worker.has_empty_queue().await {
+                    trace!(
+                        "Worker {} has empty queue, trying to queue.",
+                        worker.address
+                    );
+
                     // Find next pending frame and queue it on this worker (if available).
                     let next_frame_index = match self.state.next_pending_frame().await {
                         Some(frame_index) => frame_index,

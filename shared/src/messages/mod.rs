@@ -66,7 +66,7 @@ pub enum WebSocketMessage {
     #[serde(rename = "request_frame-queue_remove")]
     MasterFrameQueueRemoveRequest(MasterFrameQueueRemoveRequest),
 
-    #[serde(rename = "request_frame-queue_remove")]
+    #[serde(rename = "notification_frame-queue_item-finished")]
     WorkerFrameQueueItemFinishedNotification(WorkerFrameQueueItemFinishedNotification),
 
     #[serde(rename = "request_heartbeat")]

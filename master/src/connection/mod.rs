@@ -1,5 +1,6 @@
 pub mod event_dispatcher;
 pub mod queue;
+pub mod requester;
 
 use std::io;
 use std::io::ErrorKind;
@@ -20,7 +21,7 @@ use shared::messages::handshake::{
     WorkerHandshakeResponse,
 };
 use shared::messages::heartbeat::MasterHeartbeatRequest;
-use shared::messages::queue::{MasterFrameQueueAddRequest, WorkerFrameQueueItemFinishedEvent};
+use shared::messages::queue::{FrameQueueAddResult, WorkerFrameQueueItemFinishedEvent};
 use shared::messages::traits::IntoWebSocketMessage;
 use shared::messages::{parse_websocket_message, receive_exact_message, WebSocketMessage};
 use tokio::net::TcpStream;
@@ -32,6 +33,7 @@ use tokio_tungstenite::{accept_async, tungstenite, WebSocketStream};
 use crate::cluster::state::ClusterManagerState;
 use crate::connection::event_dispatcher::WorkerEventDispatcher;
 use crate::connection::queue::{FrameOnWorker, WorkerQueue};
+use crate::connection::requester::WorkerRequester;
 
 /// State of the WebSocket connection with the worker.
 pub enum WorkerConnectionState {
@@ -61,6 +63,8 @@ pub struct Worker {
     /// distinct async channels.  
     pub event_dispatcher: Arc<WorkerEventDispatcher>,
 
+    pub requester: Arc<WorkerRequester>,
+
     /// Internal queue representation for this worker.
     /// Likely to be slightly off sync with the actual worker (as WebSockets introduce minimal latency).
     pub queue: Arc<Mutex<WorkerQueue>>,
@@ -80,7 +84,7 @@ impl Worker {
     ) -> Result<Self> {
         let queue = Arc::new(Mutex::new(WorkerQueue::new()));
 
-        let (logger, message_sender_channel, event_dispatcher, connection_tasks) =
+        let (logger, message_sender_channel, event_dispatcher, requester, connection_tasks) =
             Self::accept_ws_stream_and_initialize_tasks(
                 stream,
                 queue.clone(),
@@ -95,6 +99,7 @@ impl Worker {
             sender_channel: message_sender_channel,
             connection_state: WorkerConnectionState::Connected,
             event_dispatcher,
+            requester,
             queue,
             connection_tasks,
         })
@@ -110,20 +115,26 @@ impl Worker {
         self.queue.lock().await.is_empty()
     }
 
-    /// Queue a frame onto the worker. This sends a WebSocket message.
+    /// Queue a frame onto the worker. This sends a WebSocket message and waits for the worker response.
     pub async fn queue_frame(&self, job: BlenderJob, frame_index: usize) -> Result<()> {
-        // TODO Wait for response.
-        MasterFrameQueueAddRequest::new(job.clone(), frame_index)
-            .into_ws_message()
-            .send(&self.sender_channel)
-            .wrap_err_with(|| miette!("Could not send frame queue add request to worker."))?;
+        let add_result = self
+            .requester
+            .frame_queue_add_item(job.clone(), frame_index)
+            .await?;
 
-        self.queue
-            .lock()
-            .await
-            .add(FrameOnWorker::new(job, frame_index));
-
-        Ok(())
+        match add_result {
+            FrameQueueAddResult::AddedToQueue => {
+                self.queue
+                    .lock()
+                    .await
+                    .add(FrameOnWorker::new(job, frame_index));
+                Ok(())
+            }
+            FrameQueueAddResult::Errored { reason } => Err(miette!(
+                "Errored on worker when trying to add frame to queue: {}",
+                reason
+            )),
+        }
     }
 
     /*
@@ -140,6 +151,7 @@ impl Worker {
         Arc<Logger>,
         Arc<UnboundedSender<Message>>,
         Arc<WorkerEventDispatcher>,
+        Arc<WorkerRequester>,
         JoinSet<Result<()>>,
     )> {
         // Initialize logger that will be distributed across this worker instance.
@@ -220,8 +232,13 @@ impl Worker {
                 .into_inner(),
         )
         .await;
-
         let event_dispatcher_arc = Arc::new(event_dispatcher);
+
+        let requester = WorkerRequester::new(
+            sender_channel.clone(),
+            event_dispatcher_arc.clone(),
+        );
+        let requester_arc = Arc::new(requester);
 
         // Finally, spawn two final tasks:
         // - one that maintains the heartbeat with the worker (it sends a heartbeat request every ~10 seconds and waits for the response) and
@@ -246,6 +263,7 @@ impl Worker {
             logger,
             sender_channel,
             event_dispatcher_arc,
+            requester_arc,
             worker_connection_future_set,
         ))
     }
@@ -371,7 +389,8 @@ impl Worker {
     ) -> Result<()> {
         logger.debug("Running task loop: handling incoming messages.");
 
-        let mut queue_item_finished_receiver = event_dispatcher.queue_item_finished_receiver();
+        let mut queue_item_finished_receiver =
+            event_dispatcher.frame_queue_item_finished_event_receiver();
 
         loop {
             tokio::select! {
@@ -418,7 +437,7 @@ impl Worker {
 
             let time_heartbeat_wait_start = Instant::now();
             event_dispatcher
-                .wait_for_heartbeat_response(Duration::from_secs(5))
+                .wait_for_heartbeat_response(None)
                 .await
                 .wrap_err_with(|| miette!("Worker did not respond to heartbeat."))?;
 

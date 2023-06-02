@@ -14,7 +14,7 @@ pub static MASTER_FRAME_QUEUE_ADD_REQUEST_TYPE_NAME: &str = "request_frame-queue
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MasterFrameQueueAddRequest {
-    message_request_id: MessageRequestID,
+    pub message_request_id: MessageRequestID,
 
     pub job: BlenderJob,
     pub frame_index: usize,
@@ -71,7 +71,7 @@ pub enum FrameQueueAddResult {
 // TODO Integrate request and response cycles into both the master and the worker.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerFrameQueueAddResponse {
-    message_request_context_id: MessageRequestID,
+    pub message_request_context_id: MessageRequestID,
 
     pub result: FrameQueueAddResult,
 }
@@ -123,7 +123,7 @@ pub static MASTER_FRAME_QUEUE_REMOVE_REQUEST_TYPE_NAME: &str = "request_frame-qu
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MasterFrameQueueRemoveRequest {
-    message_request_id: MessageRequestID,
+    pub message_request_id: MessageRequestID,
 
     pub job_name: String,
     pub frame_index: usize,
@@ -182,7 +182,7 @@ pub enum FrameQueueRemoveResult {
 // TODO Integrate request and response cycles into both the master and the worker.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerFrameQueueRemoveResponse {
-    message_request_context_id: MessageRequestID,
+    pub message_request_context_id: MessageRequestID,
 
     pub result: FrameQueueRemoveResult,
 }

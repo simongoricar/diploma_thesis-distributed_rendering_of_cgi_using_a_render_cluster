@@ -12,6 +12,7 @@ use crate::connection::Worker;
 pub enum FrameStatus {
     Pending,
     QueuedOnWorker { worker: SocketAddr },
+    RenderingOnWorker { worker: SocketAddr },
     Finished,
 }
 
@@ -83,6 +84,24 @@ impl ClusterManagerState {
             .ok_or_else(|| miette!("Could not find frame with given index."))?;
 
         frame.status = FrameStatus::QueuedOnWorker {
+            worker: worker_address,
+        };
+        Ok(())
+    }
+
+    pub async fn mark_frame_as_rendering_on_worker(
+        &self,
+        worker_address: SocketAddr,
+        frame_index: usize,
+    ) -> Result<()> {
+        let mut locked_frames = self.job_frames.lock().await;
+
+        let frame = locked_frames
+            .iter_mut()
+            .find(|frame| frame.frame_index == frame_index)
+            .ok_or_else(|| miette!("Could not find frame with given index."))?;
+
+        frame.status = FrameStatus::RenderingOnWorker {
             worker: worker_address,
         };
         Ok(())

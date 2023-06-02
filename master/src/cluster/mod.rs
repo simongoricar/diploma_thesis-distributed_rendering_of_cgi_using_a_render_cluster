@@ -137,7 +137,10 @@ impl ClusterManager {
                         worker.address
                     );
 
-                    // Find next pending frame and queue it on this worker (if available).
+                    /*
+                     * Find next pending frame and queue it on this worker (if available).
+                     */
+
                     let next_frame_index = match self.state.next_pending_frame().await {
                         Some(frame_index) => frame_index,
                         None => {
@@ -153,11 +156,13 @@ impl ClusterManager {
                     worker
                         .queue_frame(self.job.clone(), next_frame_index)
                         .await?;
+
                     self.state
                         .mark_frame_as_queued_on_worker(worker.address, next_frame_index)
                         .await?;
                 }
             }
+
             drop(workers_locked);
 
             tokio::time::sleep(Duration::from_secs_f64(0.25f64)).await;

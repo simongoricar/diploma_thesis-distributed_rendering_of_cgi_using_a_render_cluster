@@ -7,20 +7,36 @@ use log::{info, warn};
 use miette::{miette, IntoDiagnostic};
 use miette::{Context, Result};
 use shared::messages::heartbeat::WorkerHeartbeatResponse;
-use shared::messages::queue::WorkerFrameQueueItemFinishedEvent;
+use shared::messages::queue::{
+    WorkerFrameQueueAddResponse,
+    WorkerFrameQueueItemFinishedEvent,
+    WorkerFrameQueueItemRenderingEvent,
+    WorkerFrameQueueRemoveResponse,
+};
+use shared::messages::traits::Message;
 use shared::messages::WebSocketMessage;
 use tokio::sync::broadcast;
+use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
+
+#[derive(Clone)]
+struct EventSenders {
+    /// Receives worker heartbeat responses.
+    heartbeat_response: Arc<Sender<WorkerHeartbeatResponse>>,
+
+    queue_item_add_response: Arc<Sender<WorkerFrameQueueAddResponse>>,
+
+    queue_item_remove_response: Arc<Sender<WorkerFrameQueueRemoveResponse>>,
+
+    queue_item_rendering_event: Arc<Sender<WorkerFrameQueueItemRenderingEvent>>,
+
+    // Receives worker's queue item finished events.
+    queue_item_finished_event: Arc<Sender<WorkerFrameQueueItemFinishedEvent>>,
+}
 
 /// Manages all incoming WebSocket messages for a worker.
 pub struct WorkerEventDispatcher {
-    /// `tokio`'s broadcast `Sender`. `subscribe()` to receive worker heartbeat responses.
-    heartbeat_response_sender: Arc<broadcast::Sender<WorkerHeartbeatResponse>>,
-
-    // TODO Need new events here.
-
-    // `tokio`'s broadcast `Sender`. `subscribe()` to receive worker's queue item finished events.
-    queue_item_finished_sender: Arc<broadcast::Sender<WorkerFrameQueueItemFinishedEvent>>,
+    senders: EventSenders,
 
     /// `JoinHandle` for the async task that is running this dispatcher.
     /// As long as this task is running, receivers from this dispatcher will receive incoming messages.
@@ -32,21 +48,34 @@ impl WorkerEventDispatcher {
     /// Initialize a new `WorkerEventDispatcher`, consuming the WebSocket connection's async receiver channel.
     pub async fn new(websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>) -> Self {
         let (heartbeat_tx, _) = broadcast::channel::<WorkerHeartbeatResponse>(512);
+        let (queue_item_add_tx, _) = broadcast::channel::<WorkerFrameQueueAddResponse>(512);
+        let (queue_item_remove_tx, _) = broadcast::channel::<WorkerFrameQueueRemoveResponse>(512);
+        let (queue_item_rendering_tx, _) =
+            broadcast::channel::<WorkerFrameQueueItemRenderingEvent>(512);
         let (queue_item_finished_tx, _) =
             broadcast::channel::<WorkerFrameQueueItemFinishedEvent>(512);
 
         let heartbeat_tx_arc = Arc::new(heartbeat_tx);
+        let queue_item_add_tx_arc = Arc::new(queue_item_add_tx);
+        let queue_item_remove_tx_arc = Arc::new(queue_item_remove_tx);
+        let queue_item_rendering_tx_arc = Arc::new(queue_item_rendering_tx);
         let queue_item_finished_tx_arc = Arc::new(queue_item_finished_tx);
 
+        let senders = EventSenders {
+            heartbeat_response: heartbeat_tx_arc,
+            queue_item_add_response: queue_item_add_tx_arc,
+            queue_item_remove_response: queue_item_remove_tx_arc,
+            queue_item_rendering_event: queue_item_rendering_tx_arc,
+            queue_item_finished_event: queue_item_finished_tx_arc,
+        };
+
         let dispatcher_join_handle = tokio::spawn(Self::run(
-            heartbeat_tx_arc.clone(),
-            queue_item_finished_tx_arc.clone(),
+            senders.clone(),
             websocket_receiver_channel,
         ));
 
         Self {
-            heartbeat_response_sender: heartbeat_tx_arc,
-            queue_item_finished_sender: queue_item_finished_tx_arc,
+            senders,
             task_join_handle: dispatcher_join_handle,
         }
     }
@@ -54,8 +83,7 @@ impl WorkerEventDispatcher {
     /// Run the event dispatcher indefinitely, reading the incoming WebSocket messages
     /// and broadcasting them to subscribed `tokio::broadcast::Receiver`s.
     async fn run(
-        heartbeat_channel_event_sender: Arc<broadcast::Sender<WorkerHeartbeatResponse>>,
-        queue_item_finished_event_sender: Arc<broadcast::Sender<WorkerFrameQueueItemFinishedEvent>>,
+        senders: EventSenders,
         mut websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>,
     ) {
         info!("WorkerEventDispatcher: Running event distribution loop.");
@@ -73,11 +101,20 @@ impl WorkerEventDispatcher {
             // is when there are no receivers. We don't want to propagate such an error
             // (as it really isn't an error, it's just that no-one will see that message as no-one is subscribed).
             match next_message {
-                WebSocketMessage::WorkerFrameQueueItemFinishedEvent(notification) => {
-                    let _ = queue_item_finished_event_sender.send(notification);
+                WebSocketMessage::WorkerFrameQueueAddResponse(response) => {
+                    let _ = senders.queue_item_add_response.send(response);
+                }
+                WebSocketMessage::WorkerFrameQueueRemoveResponse(response) => {
+                    let _ = senders.queue_item_remove_response.send(response);
+                }
+                WebSocketMessage::WorkerFrameQueueItemRenderingEvent(event) => {
+                    let _ = senders.queue_item_rendering_event.send(event);
+                }
+                WebSocketMessage::WorkerFrameQueueItemFinishedEvent(event) => {
+                    let _ = senders.queue_item_finished_event.send(event);
                 }
                 WebSocketMessage::WorkerHeartbeatResponse(response) => {
-                    let _ = heartbeat_channel_event_sender.send(response);
+                    let _ = senders.heartbeat_response.send(response);
                 }
                 _ => {
                     warn!(
@@ -93,74 +130,147 @@ impl WorkerEventDispatcher {
      * Public event channel methods.
      */
 
-    /// Get a `Receiver` for future "queue item finished" worker messages.
-    pub fn queue_item_finished_receiver(
+    /// Get a `Receiver` for future "frame queue item add response" worker messages.
+    pub fn frame_queue_item_add_response_receiver(&self) -> Receiver<WorkerFrameQueueAddResponse> {
+        self.senders.queue_item_add_response.subscribe()
+    }
+
+    /// Get a `Receiver` for future "frame queue item removal response" worker messages.
+    pub fn frame_queue_item_remove_response_receiver(
         &self,
-    ) -> broadcast::Receiver<WorkerFrameQueueItemFinishedEvent> {
-        self.queue_item_finished_sender.subscribe()
+    ) -> Receiver<WorkerFrameQueueRemoveResponse> {
+        self.senders.queue_item_remove_response.subscribe()
+    }
+
+    /// Get a `Receiver` for future "frame queue item is rendering" worker messages.
+    pub fn frame_queue_item_rendering_event_receiver(
+        &self,
+    ) -> Receiver<WorkerFrameQueueItemRenderingEvent> {
+        self.senders.queue_item_rendering_event.subscribe()
+    }
+
+    /// Get a `Receiver` for future "frame queue item is finished" worker messages.
+    pub fn frame_queue_item_finished_event_receiver(
+        &self,
+    ) -> Receiver<WorkerFrameQueueItemFinishedEvent> {
+        self.senders.queue_item_finished_event.subscribe()
     }
 
     /// Get a `Receiver` for future "heartbeat response" worker messages.
-    pub fn heartbeat_response_receiver(&self) -> broadcast::Receiver<WorkerHeartbeatResponse> {
-        self.heartbeat_response_sender.subscribe()
+    pub fn heartbeat_response_receiver(&self) -> Receiver<WorkerHeartbeatResponse> {
+        self.senders.heartbeat_response.subscribe()
     }
 
     /*
      * One-shot async event methods
      */
 
-    /// One-shot event method that completes when either some worker's queue item has been finished
-    /// or when the `timeout` times out, whichever is sooner.
-    ///
-    /// If timed out, `Err` is returned.
-    pub async fn wait_for_queue_item_finished(
+    /// Generic "wait for this message type" abstraction.
+    pub async fn wait_for_message<R: Message + Clone>(
         &self,
-        timeout: Duration,
-    ) -> Result<WorkerFrameQueueItemFinishedEvent> {
-        let queue_item_finished_future = async {
-            self.queue_item_finished_receiver()
-                .recv()
-                .await
-                .into_diagnostic()
-                .wrap_err_with(|| {
-                    miette!("Could not receive queue item finished notification through channel.")
-                })
+        mut receiver: Receiver<R>,
+        timeout: Option<Duration>,
+    ) -> Result<R> {
+        let timeout = timeout.unwrap_or(Duration::from_secs(5));
+
+        let receiver_future = async {
+            receiver.recv().await.into_diagnostic().wrap_err_with(|| {
+                miette!(
+                    "Could not receive message through channel (expected {}).",
+                    R::type_name()
+                )
+            })
         };
 
-        let timeout_future = tokio::time::timeout(timeout, queue_item_finished_future).await;
-        match timeout_future {
-            Ok(notification_result) => notification_result,
+        let resolved_future = tokio::time::timeout(timeout, receiver_future).await;
+        match resolved_future {
+            Ok(result) => result,
             Err(_) => Err(miette!(
-                "Waiting for queue item finished notification timed out."
+                "Timed out while waiting for message: {}",
+                R::type_name()
             )),
         }
     }
 
+    /// Generic "wait for this message with additional check" abstraction.
+    /// Provide a `receiver` to receive the messages through and a closure that takes a reference
+    /// to the message and returns a boolean indicating whether that message matches what you want.
+    pub async fn wait_for_message_with_predicate<R: Message + Clone, F: Fn(&R) -> bool>(
+        &self,
+        mut receiver: Receiver<R>,
+        timeout: Option<Duration>,
+        predicate: F,
+    ) -> Result<R> {
+        let timeout = timeout.unwrap_or(Duration::from_secs(5));
+
+        // Keeps receiving given messages until the predicate matches.
+        let predicated_receiver_future = async {
+            loop {
+                let next_message = receiver.recv().await.into_diagnostic().wrap_err_with(|| {
+                    miette!(
+                        "Could not receive message through channel (expected {})",
+                        R::type_name()
+                    )
+                });
+
+                match next_message {
+                    Ok(message) => {
+                        if predicate(&message) {
+                            break Ok(message);
+                        }
+                    }
+                    Err(error) => {
+                        break Err(error);
+                    }
+                }
+            }
+        };
+
+        let resolved_future = tokio::time::timeout(timeout, predicated_receiver_future).await;
+        match resolved_future {
+            Ok(result) => result,
+            Err(_) => Err(miette!(
+                "Timed out while waiting for predicated message: {}",
+                R::type_name()
+            )),
+        }
+    }
+
+    pub async fn wait_for_frame_queue_add_item_response(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<WorkerFrameQueueAddResponse> {
+        self.wait_for_message(
+            self.frame_queue_item_add_response_receiver(),
+            timeout,
+        )
+        .await
+    }
+
+    /// One-shot event method that completes when either some worker's queue item has been finished
+    /// or when the `timeout` is reached, whichever is sooner. The default timeout is 5 seconds.
+    ///
+    /// If timed out, `Err` is returned.
+    pub async fn wait_for_queue_item_finished(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<WorkerFrameQueueItemFinishedEvent> {
+        self.wait_for_message(
+            self.frame_queue_item_finished_event_receiver(),
+            timeout,
+        )
+        .await
+    }
+
     /// One-shot event method that completes when the worker sends the next heartbeat response
-    /// or when the `timeout` times out, whichever is sooner.
+    /// or when the `timeout` is reached, whichever is sooner. The default timeout is 5 seconds.
     ///
     /// If timed out, `Err` is returned.
     pub async fn wait_for_heartbeat_response(
         &self,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> Result<WorkerHeartbeatResponse> {
-        let heartbeat_response_future = async {
-            self.heartbeat_response_receiver()
-                .recv()
-                .await
-                .into_diagnostic()
-                .wrap_err_with(|| miette!("Could not receive heartbeat response through channel."))
-        };
-
-        let timeout_future = tokio::time::timeout(timeout, heartbeat_response_future).await;
-        match timeout_future {
-            Ok(response_result) => match response_result {
-                Ok(response) => Ok(response),
-                Err(error) => Err(error),
-            },
-            Err(_) => Err(miette!(
-                "Waiting for heartbeat response timed out."
-            )),
-        }
+        self.wait_for_message(self.heartbeat_response_receiver(), timeout)
+            .await
     }
 }

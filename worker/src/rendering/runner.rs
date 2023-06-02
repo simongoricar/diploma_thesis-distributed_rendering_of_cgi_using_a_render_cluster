@@ -94,7 +94,7 @@ impl BlenderJobRunner {
             "--render-output",
             &output_file_path_str,
             "--render-format",
-            "PNG",
+            &job.output_file_format,
             "--render-frame",
             &frame_index.to_string(),
         ];

@@ -10,3 +10,4 @@ wait_for_number_of_workers = 2
 
 output_directory_path = "%BASE%/blender-projects/project-cube/output"
 output_file_name_format = "#####"
+output_file_format = "PNG"

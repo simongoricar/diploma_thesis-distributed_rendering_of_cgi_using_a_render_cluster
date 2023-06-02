@@ -23,6 +23,8 @@ pub struct BlenderJob {
     pub output_directory_path: String,
 
     pub output_file_name_format: String,
+
+    pub output_file_format: String,
 }
 
 impl BlenderJob {

@@ -175,6 +175,9 @@ pub enum FrameQueueRemoveResult {
     #[serde(rename = "already-rendering")]
     AlreadyRendering,
 
+    #[serde(rename = "already-finished")]
+    AlreadyFinished,
+
     #[serde(rename = "errored")]
     Errored { reason: String },
 }
@@ -208,6 +211,13 @@ impl WorkerFrameQueueRemoveResponse {
             result: FrameQueueRemoveResult::Errored {
                 reason: reason.into(),
             },
+        }
+    }
+
+    pub fn new_with_result(request_id: MessageRequestID, result: FrameQueueRemoveResult) -> Self {
+        Self {
+            message_request_context_id: request_id,
+            result,
         }
     }
 }

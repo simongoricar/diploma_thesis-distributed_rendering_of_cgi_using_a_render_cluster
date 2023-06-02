@@ -5,7 +5,8 @@ use std::time::Duration;
 use futures_channel::mpsc::UnboundedSender;
 use log::{error, info};
 use shared::jobs::BlenderJob;
-use shared::messages::queue::WorkerFrameQueueItemFinishedEvent;
+use shared::messages::queue::{FrameQueueRemoveResult, WorkerFrameQueueItemFinishedEvent};
+use shared::messages::traits::IntoWebSocketMessage;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite;
 
@@ -138,8 +139,7 @@ impl WorkerAutomaticQueue {
                 );
 
                 // Report back to master that we finished this frame.
-                // TODO Update to newer struct.
-                let send_result = WorkerFrameQueueItemFinishedEvent::new(job_name, frame_index)
+                let send_result = WorkerFrameQueueItemFinishedEvent::new_ok(job_name, frame_index)
                     .into_ws_message()
                     .send(&message_sender);
 
@@ -178,12 +178,36 @@ impl WorkerAutomaticQueue {
         }
     }
 
-    pub async fn unqueue_frame(&self, job_name: String, frame_index: usize) {
+    pub async fn unqueue_frame(
+        &self,
+        job_name: String,
+        frame_index: usize,
+    ) -> FrameQueueRemoveResult {
         let mut locked_frames_vec = self.frames.lock().await;
 
-        // FIXME This could potentially un-queue frames that have already started.
+        let frame = locked_frames_vec
+            .iter()
+            .enumerate()
+            .find(|(_, frame)| frame.job.job_name == job_name && frame.frame_index == frame_index)
+            .ok_or_else(|| FrameQueueRemoveResult::Errored {
+                reason: "Can't find such queued frame.".to_string(),
+            });
 
-        locked_frames_vec
-            .retain(|frame| frame.job.job_name != job_name || frame.frame_index != frame_index);
+        let (frame_array_index, frame) = match frame {
+            Ok(frame) => frame,
+            Err(result) => {
+                return result;
+            }
+        };
+
+        if frame.state == WorkerFrameState::Rendering {
+            FrameQueueRemoveResult::AlreadyRendering
+        } else if frame.state == WorkerFrameState::Finished {
+            FrameQueueRemoveResult::AlreadyFinished
+        } else {
+            locked_frames_vec.remove(frame_array_index);
+
+            FrameQueueRemoveResult::RemovedFromQueue
+        }
     }
 }

@@ -15,7 +15,12 @@ use shared::messages::handshake::{
     WorkerHandshakeResponse,
 };
 use shared::messages::heartbeat::WorkerHeartbeatResponse;
-use shared::messages::queue::{MasterFrameQueueAddRequest, MasterFrameQueueRemoveRequest};
+use shared::messages::queue::{
+    MasterFrameQueueAddRequest,
+    MasterFrameQueueRemoveRequest,
+    WorkerFrameQueueAddResponse,
+    WorkerFrameQueueRemoveResponse,
+};
 use shared::messages::traits::IntoWebSocketMessage;
 use shared::messages::{parse_websocket_message, receive_exact_message, WebSocketMessage};
 use tokio::net::TcpStream;
@@ -26,7 +31,8 @@ use tokio_tungstenite::{connect_async, tungstenite, MaybeTlsStream, WebSocketStr
 use url::Url;
 
 use crate::connection::event_dispatcher::MasterEventDispatcher;
-use crate::utilities::{BlenderJobRunner, WorkerAutomaticQueue};
+use crate::rendering::queue::WorkerAutomaticQueue;
+use crate::rendering::runner::BlenderJobRunner;
 
 
 /// Worker instance. Manages the connection with the master server, receives requests
@@ -304,6 +310,11 @@ impl Worker {
                         queue_add_request.job,
                         queue_add_request.frame_index
                     ).await;
+
+                    WorkerFrameQueueAddResponse::new_ok(queue_add_request.message_request_id)
+                        .into_ws_message()
+                        .send(&sender_channel)
+                        .wrap_err_with(|| miette!("Could not send frame add response."))?;
                 },
                 queue_remove_request = queue_remove_request_receiver.recv() => {
                     let queue_remove_request: MasterFrameQueueRemoveRequest = queue_remove_request.into_diagnostic()?;
@@ -313,10 +324,20 @@ impl Worker {
                         queue_remove_request.frame_index
                     );
 
-                    frame_queue.unqueue_frame(
+                    let remove_result = frame_queue.unqueue_frame(
                         queue_remove_request.job_name,
                         queue_remove_request.frame_index
                     ).await;
+
+                    debug!("Frame removal result: {remove_result:?}, responding.");
+
+                    WorkerFrameQueueRemoveResponse::new_with_result(
+                        queue_remove_request.message_request_id,
+                        remove_result
+                    )
+                        .into_ws_message()
+                        .send(&sender_channel)
+                        .wrap_err_with(|| miette!("Could not send frame queue removal response."))?;
                 }
             }
         }

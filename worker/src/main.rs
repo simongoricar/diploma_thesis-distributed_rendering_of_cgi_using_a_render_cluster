@@ -9,7 +9,7 @@ use miette::{miette, Context, IntoDiagnostic, Result};
 
 use crate::cli::CLIArgs;
 use crate::connection::Worker;
-use crate::utilities::BlenderJobRunner;
+use crate::rendering::runner::BlenderJobRunner;
 
 #[tokio::main]
 async fn main() -> Result<()> {

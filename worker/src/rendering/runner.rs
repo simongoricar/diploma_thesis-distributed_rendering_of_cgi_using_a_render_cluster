@@ -2,7 +2,7 @@ use std::fs::create_dir_all;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use log::info;
+use log::{debug, info};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::jobs::BlenderJob;
 use tokio::process::Command;
@@ -55,6 +55,11 @@ impl BlenderJobRunner {
          * Parse output file
          */
         let output_file_path_str = {
+            debug!(
+                "Before parsing: output_directory_path is {}",
+                job.output_directory_path
+            );
+
             let output_directory = parse_with_base_directory_prefix(
                 &job.output_directory_path,
                 Some(&self.base_directory_path),
@@ -66,7 +71,14 @@ impl BlenderJobRunner {
                     .wrap_err_with(|| miette!("Could not create missing directories."))?;
             }
 
+
             let mut output_path = output_directory.to_string_lossy().to_string();
+            debug!(
+                "After parsing: output_directory_path is {}",
+                output_path
+            );
+
+            output_path.push('/');
             output_path.push_str(&job.output_file_name_format);
 
             output_path
@@ -76,17 +88,21 @@ impl BlenderJobRunner {
 
         let time_render_start = Instant::now();
 
+        let blender_args = [
+            &blender_file_path_str,
+            "--background",
+            "--render-output",
+            &output_file_path_str,
+            "--render-format",
+            "PNG",
+            "--render-frame",
+            &frame_index.to_string(),
+        ];
+
+        debug!("Blender arguments: {:?}", blender_args);
+
         Command::new(&self.blender_binary_path)
-            .args([
-                &blender_file_path_str,
-                "--background",
-                "--render-output",
-                &output_file_path_str,
-                "--render-format",
-                "PNG",
-                "--render-frame",
-                &frame_index.to_string(),
-            ])
+            .args(blender_args)
             .output()
             .await
             .into_diagnostic()

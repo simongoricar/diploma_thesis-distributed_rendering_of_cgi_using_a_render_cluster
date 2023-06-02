@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
 
     info!("Running worker indefinitely.");
     client_worker
-        .run_forever(runner)
+        .run_to_job_completion(runner)
         .await
         .wrap_err_with(|| miette!("Errored while running worker"))?;
 

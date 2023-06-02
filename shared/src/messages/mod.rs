@@ -10,6 +10,7 @@ use crate::messages::handshake::{
     WorkerHandshakeResponse,
 };
 use crate::messages::heartbeat::{MasterHeartbeatRequest, WorkerHeartbeatResponse};
+use crate::messages::job::MasterJobFinishedEvent;
 use crate::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
@@ -22,6 +23,7 @@ use crate::messages::traits::Message;
 
 pub mod handshake;
 pub mod heartbeat;
+pub mod job;
 pub mod queue;
 pub mod traits;
 mod utilities;
@@ -99,6 +101,9 @@ pub enum WebSocketMessage {
 
     #[serde(rename = "response_heartbeat")]
     WorkerHeartbeatResponse(WorkerHeartbeatResponse),
+
+    #[serde(rename = "event_job-finished")]
+    MasterJobFinishedEvent(MasterJobFinishedEvent),
 }
 
 impl WebSocketMessage {
@@ -164,6 +169,7 @@ impl WebSocketMessage {
             }
             WebSocketMessage::MasterHeartbeatRequest(_) => MasterHeartbeatRequest::type_name(),
             WebSocketMessage::WorkerHeartbeatResponse(_) => WorkerHeartbeatResponse::type_name(),
+            WebSocketMessage::MasterJobFinishedEvent(_) => MasterJobFinishedEvent::type_name(),
         }
     }
 }

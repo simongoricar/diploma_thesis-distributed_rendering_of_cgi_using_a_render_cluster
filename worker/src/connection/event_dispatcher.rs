@@ -3,50 +3,71 @@ use std::time::Duration;
 
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
-use log::{info, warn};
+use log::{info, trace, warn};
 use miette::{miette, Context, IntoDiagnostic, Result};
+use shared::cancellation::CancellationToken;
 use shared::messages::heartbeat::MasterHeartbeatRequest;
+use shared::messages::job::MasterJobFinishedEvent;
 use shared::messages::queue::{MasterFrameQueueAddRequest, MasterFrameQueueRemoveRequest};
 use shared::messages::WebSocketMessage;
 use tokio::sync::broadcast;
+use tokio::task::JoinHandle;
 
 /// Manages all incoming WebSocket messages from the master server.
 pub struct MasterEventDispatcher {
-    /// `tokio`'s broadcast `Sender`. `subscribe()` to receive heartbeat requests.
+    /// Receives heartbeat requests.
     heartbeat_request_sender: Arc<broadcast::Sender<MasterHeartbeatRequest>>,
 
-    /// `tokio`'s broadcast `Sender`. `subscribe()` to receive queue item add requests.
+    /// Receives frame queue item adding requests.
     queue_frame_add_request_sender: Arc<broadcast::Sender<MasterFrameQueueAddRequest>>,
 
-    /// `tokio`'s broadcast `Sender`. `subscribe()` to receive queue item remove requests.
+    /// Receives frame queue item removal requests.
     queue_frame_remove_request_sender: Arc<broadcast::Sender<MasterFrameQueueRemoveRequest>>,
+
+    /// Receives job finished events.
+    job_finished_event_sender: Arc<broadcast::Sender<MasterJobFinishedEvent>>,
+
+    task_join_handle: JoinHandle<()>,
 }
 
 impl MasterEventDispatcher {
     /// Initialize a new `MasterEventDispatcher`, consuming the WebSocket connection's
     /// async receiver channel.
-    pub async fn new(receiver_channel: UnboundedReceiver<WebSocketMessage>) -> Self {
+    pub async fn new(
+        receiver_channel: UnboundedReceiver<WebSocketMessage>,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         let (heartbeat_request_tx, _) = broadcast::channel::<MasterHeartbeatRequest>(512);
         let (queue_frame_add_request_tx, _) = broadcast::channel::<MasterFrameQueueAddRequest>(512);
         let (queue_frame_remove_request_tx, _) =
             broadcast::channel::<MasterFrameQueueRemoveRequest>(512);
+        let (job_finished_event_tx, _) = broadcast::channel::<MasterJobFinishedEvent>(512);
 
         let heartbeat_request_tx_arc = Arc::new(heartbeat_request_tx);
         let queue_frame_add_request_tx_arc = Arc::new(queue_frame_add_request_tx);
         let queue_frame_remove_request_tx_arc = Arc::new(queue_frame_remove_request_tx);
+        let job_finished_event_tx_arc = Arc::new(job_finished_event_tx);
 
-        tokio::spawn(Self::run(
+        let task_join_handle = tokio::spawn(Self::run(
             heartbeat_request_tx_arc.clone(),
             queue_frame_add_request_tx_arc.clone(),
             queue_frame_remove_request_tx_arc.clone(),
+            job_finished_event_tx_arc.clone(),
             receiver_channel,
+            cancellation_token,
         ));
 
         Self {
             heartbeat_request_sender: heartbeat_request_tx_arc,
             queue_frame_add_request_sender: queue_frame_add_request_tx_arc,
             queue_frame_remove_request_sender: queue_frame_remove_request_tx_arc,
+            job_finished_event_sender: job_finished_event_tx_arc,
+            task_join_handle,
         }
+    }
+
+    pub async fn join(self) -> Result<()> {
+        self.task_join_handle.await.into_diagnostic()
     }
 
     /// Run the event dispatcher indefinitely, reading the incoming WebSocket messages
@@ -57,17 +78,33 @@ impl MasterEventDispatcher {
         queue_frame_remove_request_event_sender: Arc<
             broadcast::Sender<MasterFrameQueueRemoveRequest>,
         >,
+        job_finished_event_sender: Arc<broadcast::Sender<MasterJobFinishedEvent>>,
         mut websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>,
+        cancellation_token: CancellationToken,
     ) {
         info!("MasterEventDispatcher: Running event distribution loop.");
 
         loop {
-            let next_message = match websocket_receiver_channel.next().await {
-                Some(message) => message,
-                None => {
-                    warn!("MasterEventDispatcher: Can't receiver message from channel, aborting event dispatcher loop.");
-                    return;
+            if cancellation_token.cancelled() {
+                trace!("MasterEventDispatcher: stopping distribution (worker stopping).");
+                break;
+            }
+
+            let next_message = if let Ok(message) = tokio::time::timeout(
+                Duration::from_secs(2),
+                websocket_receiver_channel.next(),
+            )
+            .await
+            {
+                match message {
+                    Some(message) => message,
+                    None => {
+                        warn!("MasterEventDispatcher: Can't receiver message from channel, aborting event dispatcher loop.");
+                        return;
+                    }
                 }
+            } else {
+                continue;
             };
 
             // We ignore the errors when `.send`-ing because the only reason `send` can fail
@@ -82,6 +119,9 @@ impl MasterEventDispatcher {
                 }
                 WebSocketMessage::MasterFrameQueueRemoveRequest(request) => {
                     let _ = queue_frame_remove_request_event_sender.send(request);
+                }
+                WebSocketMessage::MasterJobFinishedEvent(event) => {
+                    let _ = job_finished_event_sender.send(event);
                 }
                 _ => {
                     warn!("MasterEventDispatcher: Unexpected (but valid) incoming WebSocket message: {}", next_message.type_name());
@@ -111,6 +151,10 @@ impl MasterEventDispatcher {
         &self,
     ) -> broadcast::Receiver<MasterFrameQueueRemoveRequest> {
         self.queue_frame_remove_request_sender.subscribe()
+    }
+
+    pub fn job_finished_event_receiver(&self) -> broadcast::Receiver<MasterJobFinishedEvent> {
+        self.job_finished_event_sender.subscribe()
     }
 
     /*

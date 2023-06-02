@@ -68,7 +68,6 @@ pub enum FrameQueueAddResult {
     Errored { reason: String },
 }
 
-// TODO Integrate request and response cycles into both the master and the worker.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerFrameQueueAddResponse {
     pub message_request_context_id: MessageRequestID,
@@ -182,7 +181,6 @@ pub enum FrameQueueRemoveResult {
     Errored { reason: String },
 }
 
-// TODO Integrate request and response cycles into both the master and the worker.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerFrameQueueRemoveResponse {
     pub message_request_context_id: MessageRequestID,
@@ -254,7 +252,6 @@ impl TryFrom<WebSocketMessage> for WorkerFrameQueueRemoveResponse {
 pub static WORKER_FRAME_QUEUE_ITEM_RENDERING_EVENT: &str =
     "event_frame-queue_item-started-rendering";
 
-// TODO Integrate this new event into both the master and the worker.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerFrameQueueItemRenderingEvent {
     pub job_name: String,

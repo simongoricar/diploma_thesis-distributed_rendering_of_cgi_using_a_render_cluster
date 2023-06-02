@@ -1,20 +1,21 @@
 pub mod event_dispatcher;
 
-use std::io;
-use std::io::ErrorKind;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt, TryStreamExt};
-use log::{debug, info};
+use futures_util::{SinkExt, StreamExt};
+use log::{debug, info, trace};
 use miette::{miette, Context, IntoDiagnostic, Result};
+use shared::cancellation::CancellationToken;
 use shared::messages::handshake::{
     MasterHandshakeAcknowledgement,
     MasterHandshakeRequest,
     WorkerHandshakeResponse,
 };
 use shared::messages::heartbeat::WorkerHeartbeatResponse;
+use shared::messages::job::MasterJobFinishedEvent;
 use shared::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
@@ -27,7 +28,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, tungstenite, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 use crate::connection::event_dispatcher::MasterEventDispatcher;
@@ -76,18 +77,26 @@ impl Worker {
     ///
     /// Whenever a frame is queued, we render it and respond with the item finished event
     /// (but only one frame at a time).
-    pub async fn run_forever(self, blender_runner: BlenderJobRunner) -> Result<()> {
+    pub async fn run_to_job_completion(self, blender_runner: BlenderJobRunner) -> Result<()> {
+        let cancellation_token = CancellationToken::new();
+
         let sender_channel = Arc::new(self.sender_tx);
         let receiver_channel = Arc::new(Mutex::new(self.receiver_rx));
 
         let mut worker_connection_future_set: JoinSet<Result<()>> = JoinSet::new();
 
-        let incoming_messages_handler =
-            Self::forward_incoming_messages_through_channel(self.ws_stream, self.receiver_tx);
+        let incoming_messages_handler = Self::forward_incoming_messages_through_channel(
+            self.ws_stream,
+            self.receiver_tx,
+            cancellation_token.clone(),
+        );
         worker_connection_future_set.spawn(incoming_messages_handler);
 
-        let outgoing_messages_handler =
-            Self::forward_queued_outgoing_messages_through_websocket(self.ws_sink, self.sender_rx);
+        let outgoing_messages_handler = Self::forward_queued_outgoing_messages_through_websocket(
+            self.ws_sink,
+            self.sender_rx,
+            cancellation_token.clone(),
+        );
         worker_connection_future_set.spawn(outgoing_messages_handler);
 
         let handshake_handle = worker_connection_future_set.spawn(Self::perform_handshake(
@@ -111,6 +120,7 @@ impl Worker {
                     )
                 })?
                 .into_inner(),
+            cancellation_token.clone(),
         )
         .await;
 
@@ -119,12 +129,14 @@ impl Worker {
         worker_connection_future_set.spawn(Self::respond_to_heartbeats(
             event_dispatcher_arc.clone(),
             sender_channel.clone(),
+            cancellation_token.clone(),
         ));
 
         worker_connection_future_set.spawn(Self::manage_incoming_messages(
             blender_runner,
-            event_dispatcher_arc,
+            event_dispatcher_arc.clone(),
             sender_channel.clone(),
+            cancellation_token.clone(),
         ));
 
         info!("Connection fully established and async tasks are running.");
@@ -132,6 +144,10 @@ impl Worker {
         while !worker_connection_future_set.is_empty() {
             worker_connection_future_set.join_next().await;
         }
+
+        let event_dispatcher = Arc::try_unwrap(event_dispatcher_arc)
+            .map_err(|_| miette!("Could not unwrap event_dispatcher Arc?!"))?;
+        event_dispatcher.join().await?;
 
         Ok(())
     }
@@ -189,21 +205,33 @@ impl Worker {
     async fn forward_queued_outgoing_messages_through_websocket(
         mut ws_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
         mut message_send_queue: UnboundedReceiver<Message>,
+        cancellation_token: CancellationToken,
     ) -> Result<()> {
         debug!("Running task loop: forwarding messages from send queue through WebSocket.");
 
         loop {
-            let next_outgoing_message = message_send_queue
-                .next()
-                .await
-                .ok_or_else(|| miette!("Can't get queued outgoing message from channel!"))?;
+            if let Ok(outgoing_message) =
+                tokio::time::timeout(Duration::from_secs(2), message_send_queue.next()).await
+            {
+                let outgoing_message = outgoing_message
+                    .ok_or_else(|| miette!("Can't read outgoing messages from channel!"))?;
 
-            ws_sink
-                .send(next_outgoing_message)
-                .await
-                .into_diagnostic()
-                .wrap_err_with(|| miette!("Could not send queued outgoing message, sink failed."))?;
+                ws_sink
+                    .send(outgoing_message)
+                    .await
+                    .into_diagnostic()
+                    .wrap_err_with(|| {
+                        miette!("Could not send queued outgoing message, sink failed.")
+                    })?;
+            }
+
+            if cancellation_token.cancelled() {
+                trace!("Stopping outgoing messages sender (worker stopping).");
+                break;
+            }
         }
+
+        Ok(())
     }
 
     /// Read the WebSocket stream, parse messages and forward them through another unbounded async channel.
@@ -211,41 +239,48 @@ impl Worker {
     ///
     /// Runs as long as `stream` can be read from or until an error happens while parsing the messages.
     async fn forward_incoming_messages_through_channel(
-        ws_stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        mut ws_stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         message_sender_channel: UnboundedSender<WebSocketMessage>,
+        cancellation_token: CancellationToken,
     ) -> Result<()> {
         debug!("Running task loop: receiving, parsing and forwarding incoming messages.");
 
-        ws_stream
-            .try_for_each(|ws_message| async {
-                let message = match parse_websocket_message(ws_message) {
-                    Ok(optional_message) => match optional_message {
-                        Some(concrete_message) => concrete_message,
-                        None => {
-                            return Ok(());
+        loop {
+            if let Ok(next_message) =
+                tokio::time::timeout(Duration::from_secs(2), ws_stream.next()).await
+            {
+                let next_message = next_message
+                    .ok_or_else(|| miette!("No next message?!"))?
+                    .into_diagnostic()
+                    .wrap_err_with(|| miette!("Could not read from WebSocket stream."))?;
+
+                match parse_websocket_message(next_message) {
+                    Ok(optional_message) => {
+                        if let Some(message) = optional_message {
+                            let channel_send_result = message_sender_channel.unbounded_send(message);
+                            if let Err(error) = channel_send_result {
+                                return Err(error).into_diagnostic().wrap_err_with(|| {
+                                    miette!(
+                                        "Failed to send parsed incoming message through channel."
+                                    )
+                                });
+                            }
                         }
-                    },
-                    Err(error) => {
-                        return Err(tungstenite::Error::Io(io::Error::new(
-                            ErrorKind::Other,
-                            error.to_string(),
-                        )));
                     }
-                };
-
-                let channel_send_result = message_sender_channel.unbounded_send(message);
-                if let Err(error) = channel_send_result {
-                    return Err(tungstenite::Error::Io(io::Error::new(
-                        ErrorKind::Other,
-                        error.to_string(),
-                    )));
+                    Err(error) => {
+                        return Err(error)
+                            .wrap_err_with(|| miette!("Errored while parsing WebSocket message."));
+                    }
                 }
+            }
 
-                Ok(())
-            })
-            .await
-            .into_diagnostic()
-            .wrap_err_with(|| miette!("Failed to receive incoming WebSocket message."))
+            if cancellation_token.cancelled() {
+                trace!("Stopping incoming messages parser/forwarder (worker stopping).");
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     /// Listen for heartbeat requests from the master server and respond to them.
@@ -254,27 +289,40 @@ impl Worker {
     async fn respond_to_heartbeats(
         event_dispatcher: Arc<MasterEventDispatcher>,
         sender_channel: Arc<UnboundedSender<Message>>,
+        cancellation_token: CancellationToken,
     ) -> Result<()> {
         debug!("Running task loop: responding to heartbeats.");
 
         let mut heartbeat_request_receiver = event_dispatcher.heartbeat_request_receiver();
 
         loop {
-            heartbeat_request_receiver
-                .recv()
-                .await
-                .into_diagnostic()
-                .wrap_err_with(|| miette!("Could not receive heartbeat request through channel."))?;
-
-            info!("Server sent heartbeat request, responding.");
-
-            WorkerHeartbeatResponse::new()
-                .into_ws_message()
-                .send(&sender_channel)
-                .wrap_err_with(|| {
-                    miette!("Could not send heartbeat response through sender channel.")
+            if let Ok(request) = tokio::time::timeout(
+                Duration::from_secs(2),
+                heartbeat_request_receiver.recv(),
+            )
+            .await
+            {
+                request.into_diagnostic().wrap_err_with(|| {
+                    miette!("Could not receive heartbeat request from broadcast channel.")
                 })?;
+
+                info!("Server sent heartbeat request, responding.");
+
+                WorkerHeartbeatResponse::new()
+                    .into_ws_message()
+                    .send(&sender_channel)
+                    .wrap_err_with(|| {
+                        miette!("Could not send heartbeat response through sender channel.")
+                    })?;
+            }
+
+            if cancellation_token.cancelled() {
+                trace!("Stopping heartbeat responder task (worker stopping).");
+                break;
+            }
         }
+
+        Ok(())
     }
 
     /// Waits for incoming requests and reacts to them
@@ -286,6 +334,7 @@ impl Worker {
         blender_runner: BlenderJobRunner,
         event_dispatcher: Arc<MasterEventDispatcher>,
         sender_channel: Arc<UnboundedSender<Message>>,
+        cancellation_token: CancellationToken,
     ) -> Result<()> {
         debug!("Running task loop: handling incoming messages.");
 
@@ -295,6 +344,7 @@ impl Worker {
         let mut queue_add_request_receiver = event_dispatcher.frame_queue_add_request_receiver();
         let mut queue_remove_request_receiver =
             event_dispatcher.frame_queue_remove_request_receiver();
+        let mut job_finished_receiver = event_dispatcher.job_finished_event_receiver();
 
         loop {
             tokio::select! {
@@ -338,8 +388,25 @@ impl Worker {
                         .into_ws_message()
                         .send(&sender_channel)
                         .wrap_err_with(|| miette!("Could not send frame queue removal response."))?;
+                },
+                job_finished_event = job_finished_receiver.recv() => {
+                    let _: MasterJobFinishedEvent = job_finished_event.into_diagnostic()?;
+
+                    info!("Received job finished event.");
+                    cancellation_token.cancel();
+
+                    trace!("Stopping incoming messages manager (worker stopping).");
+                    break;
+                },
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                    if cancellation_token.cancelled() {
+                        trace!("Stopping incoming messages manager (worker stopping).");
+                        break;
+                    }
                 }
             }
         }
+
+        Ok(())
     }
 }

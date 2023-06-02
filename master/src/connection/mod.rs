@@ -2,17 +2,17 @@ pub mod event_dispatcher;
 pub mod queue;
 pub mod requester;
 
-use std::io;
-use std::io::ErrorKind;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt, TryStreamExt};
+use futures_util::{SinkExt, StreamExt};
 use log::debug;
 use miette::{miette, Context, IntoDiagnostic, Result};
+use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
 use shared::logger::Logger;
 use shared::messages::handshake::{
@@ -28,7 +28,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{accept_async, tungstenite, WebSocketStream};
+use tokio_tungstenite::{accept_async, WebSocketStream};
 
 use crate::cluster::state::ClusterManagerState;
 use crate::connection::event_dispatcher::WorkerEventDispatcher;
@@ -71,6 +71,8 @@ pub struct Worker {
 
     /// `JoinSet` that contains all the async tasks this worker has running.
     pub connection_tasks: JoinSet<Result<()>>,
+
+    pub cluster_cancellation_token: CancellationToken,
 }
 
 impl Worker {
@@ -81,6 +83,7 @@ impl Worker {
         stream: TcpStream,
         address: SocketAddr,
         cluster_state: Arc<ClusterManagerState>,
+        cluster_cancellation_token: CancellationToken,
     ) -> Result<Self> {
         let queue = Arc::new(Mutex::new(WorkerQueue::new()));
 
@@ -89,6 +92,7 @@ impl Worker {
                 stream,
                 queue.clone(),
                 cluster_state.clone(),
+                cluster_cancellation_token.clone(),
             )
             .await?;
 
@@ -102,7 +106,22 @@ impl Worker {
             requester,
             queue,
             connection_tasks,
+            cluster_cancellation_token,
         })
+    }
+
+    pub async fn join(mut self) -> Result<()> {
+        drop(self.requester);
+
+        while !self.connection_tasks.is_empty() {
+            self.connection_tasks.join_next().await;
+        }
+
+        let event_dispatcher = Arc::try_unwrap(self.event_dispatcher)
+            .map_err(|_| miette!("Could not unwrap event_dispatcher Arc?!"))?;
+        event_dispatcher.join().await?;
+
+        Ok(())
     }
 
     /*
@@ -147,6 +166,7 @@ impl Worker {
         stream: TcpStream,
         queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
+        cluster_cancellation_token: CancellationToken,
     ) -> Result<(
         Arc<Logger>,
         Arc<UnboundedSender<Message>>,
@@ -194,6 +214,7 @@ impl Worker {
             logger.clone(),
             ws_stream,
             ws_receiver_tx,
+            cluster_cancellation_token.clone(),
         );
         worker_connection_future_set.spawn(incoming_messages_handler);
 
@@ -201,6 +222,7 @@ impl Worker {
             logger.clone(),
             ws_sink,
             ws_sender_rx,
+            cluster_cancellation_token.clone(),
         );
         worker_connection_future_set.spawn(outgoing_messages_handler);
 
@@ -230,6 +252,7 @@ impl Worker {
                     )
                 })?
                 .into_inner(),
+            cluster_cancellation_token.clone(),
         )
         .await;
         let event_dispatcher_arc = Arc::new(event_dispatcher);
@@ -248,6 +271,7 @@ impl Worker {
             logger.clone(),
             event_dispatcher_arc.clone(),
             sender_channel.clone(),
+            cluster_cancellation_token.clone(),
         ));
 
         worker_connection_future_set.spawn(Self::manage_incoming_messages(
@@ -255,6 +279,7 @@ impl Worker {
             event_dispatcher_arc.clone(),
             queue,
             cluster_state,
+            cluster_cancellation_token.clone(),
         ));
 
         logger.info("Worker connection fully established.");
@@ -315,41 +340,48 @@ impl Worker {
     /// Runs as long as `stream` can be read from or until an error happens while parsing the messages.
     async fn forward_incoming_messages_through_channel(
         logger: Arc<Logger>,
-        stream: SplitStream<WebSocketStream<TcpStream>>,
+        mut stream: SplitStream<WebSocketStream<TcpStream>>,
         message_sender_channel: UnboundedSender<WebSocketMessage>,
+        cluster_cancellation_token: CancellationToken,
     ) -> Result<()> {
         logger.debug("Running task loop: receiving, parsing and forwarding incoming messages.");
 
-        stream
-            .try_for_each(|ws_message| async {
-                let message = match parse_websocket_message(ws_message) {
-                    Ok(optional_message) => match optional_message {
-                        Some(concrete_message) => concrete_message,
-                        None => {
-                            return Ok(());
+        loop {
+            if let Ok(next_message) =
+                tokio::time::timeout(Duration::from_secs(2), stream.next()).await
+            {
+                let next_message = next_message
+                    .ok_or_else(|| miette!("No next message?!"))?
+                    .into_diagnostic()
+                    .wrap_err_with(|| miette!("Could not read from WebSocket stream."))?;
+
+                match parse_websocket_message(next_message) {
+                    Ok(optional_message) => {
+                        if let Some(message) = optional_message {
+                            let channel_send_result = message_sender_channel.unbounded_send(message);
+                            if let Err(error) = channel_send_result {
+                                return Err(error).into_diagnostic().wrap_err_with(|| {
+                                    miette!(
+                                        "Failed to send parsed incoming message through channel."
+                                    )
+                                });
+                            }
                         }
-                    },
-                    Err(error) => {
-                        return Err(tungstenite::Error::Io(io::Error::new(
-                            ErrorKind::Other,
-                            error.to_string(),
-                        )));
                     }
-                };
-
-                let channel_send_result = message_sender_channel.unbounded_send(message);
-                if let Err(error) = channel_send_result {
-                    return Err(tungstenite::Error::Io(io::Error::new(
-                        ErrorKind::Other,
-                        error.to_string(),
-                    )));
+                    Err(error) => {
+                        return Err(error)
+                            .wrap_err_with(|| miette!("Errored while parsing WebSocket message."));
+                    }
                 }
+            }
 
-                Ok(())
-            })
-            .await
-            .into_diagnostic()
-            .wrap_err_with(|| miette!("Failed to receive incoming WebSocket message."))
+            if cluster_cancellation_token.cancelled() {
+                logger.trace("Stopping incoming messages parser/forwarder (cluster stopping).");
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     /// Read from the unbounded async sending channel and forward the messages
@@ -360,23 +392,36 @@ impl Worker {
         logger: Arc<Logger>,
         mut ws_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
         mut message_send_queue_receiver: UnboundedReceiver<Message>,
+        cluster_cancellation_token: CancellationToken,
     ) -> Result<()> {
         logger.debug(
             "Running task loop: forwarding messages from channel through WebSocket connection.",
         );
 
         loop {
-            let next_outgoing_message = message_send_queue_receiver
-                .next()
-                .await
-                .ok_or_else(|| miette!("Can't get outgoing message from channel!"))?;
+            if let Ok(outgoing_message) = tokio::time::timeout(
+                Duration::from_secs(2),
+                message_send_queue_receiver.next(),
+            )
+            .await
+            {
+                let outgoing_message = outgoing_message
+                    .ok_or_else(|| miette!("Can't get outgoing message from channel!"))?;
 
-            ws_sink
-                .send(next_outgoing_message)
-                .await
-                .into_diagnostic()
-                .wrap_err_with(|| miette!("Could not send outgoing message, sink failed."))?;
+                ws_sink
+                    .send(outgoing_message)
+                    .await
+                    .into_diagnostic()
+                    .wrap_err_with(|| miette!("Could not send outgoing message, sink failed."))?;
+            }
+
+            if cluster_cancellation_token.cancelled() {
+                logger.trace("Stopping outgoing messages sender (cluster stopping).");
+                break;
+            }
         }
+
+        Ok(())
     }
 
     /// Waits for incoming messages and reacts according to their contents
@@ -386,6 +431,7 @@ impl Worker {
         event_dispatcher: Arc<WorkerEventDispatcher>,
         queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
+        cluster_cancellation_token: CancellationToken,
     ) -> Result<()> {
         logger.debug("Running task loop: handling incoming messages.");
 
@@ -409,9 +455,17 @@ impl Worker {
                         queue.clone(),
                         cluster_state.clone()
                     ).await?;
-                }
+                },
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                    if cluster_cancellation_token.cancelled() {
+                        logger.trace("Stopping incoming messages manager (cluster stopping).");
+                        break;
+                    }
+                },
             }
         }
+
+        Ok(())
     }
 
     /// Maintain a heartbeat with the worker. Every 10 seconds, a heartbeat request is sent
@@ -423,30 +477,44 @@ impl Worker {
         logger: Arc<Logger>,
         event_dispatcher: Arc<WorkerEventDispatcher>,
         sender_channel: Arc<UnboundedSender<Message>>,
+        cluster_cancellation_token: CancellationToken,
     ) -> Result<()> {
         logger.debug("Running task loop: heartbeats.");
 
+        let mut last_heartbeat_time = Instant::now();
+
         loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
 
-            logger.debug("Sending heartbeat request to worker.");
-            MasterHeartbeatRequest::new()
-                .into_ws_message()
-                .send(&sender_channel)
-                .wrap_err_with(|| miette!("Could not send heartbeat request."))?;
+            if last_heartbeat_time.elapsed() > Duration::from_secs(10) {
+                logger.debug("Sending heartbeat request to worker.");
+                MasterHeartbeatRequest::new()
+                    .into_ws_message()
+                    .send(&sender_channel)
+                    .wrap_err_with(|| miette!("Could not send heartbeat request."))?;
 
-            let time_heartbeat_wait_start = Instant::now();
-            event_dispatcher
-                .wait_for_heartbeat_response(None)
-                .await
-                .wrap_err_with(|| miette!("Worker did not respond to heartbeat."))?;
+                let time_heartbeat_wait_start = Instant::now();
+                event_dispatcher
+                    .wait_for_heartbeat_response(None)
+                    .await
+                    .wrap_err_with(|| miette!("Worker did not respond to heartbeat."))?;
 
-            let time_heartbeat_wait_latency = time_heartbeat_wait_start.elapsed();
-            logger.debug(format!(
-                "Worker responded to heartbeat request in {:.4} seconds.",
-                time_heartbeat_wait_latency.as_secs_f64(),
-            ));
+                let time_heartbeat_wait_latency = time_heartbeat_wait_start.elapsed();
+                logger.debug(format!(
+                    "Worker responded to heartbeat request in {:.4} seconds.",
+                    time_heartbeat_wait_latency.as_secs_f64(),
+                ));
+
+                last_heartbeat_time = Instant::now();
+            }
+
+            if cluster_cancellation_token.cancelled() {
+                logger.trace("Stopping heartbeat task (cluster stopping).");
+                break;
+            }
         }
+
+        Ok(())
     }
 
     /*

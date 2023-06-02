@@ -87,6 +87,4 @@ impl WorkerRequester {
 
         Ok(response.result)
     }
-
-    // TODO
 }

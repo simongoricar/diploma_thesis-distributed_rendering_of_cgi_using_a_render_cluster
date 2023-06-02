@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::future::try_join;
 use log::{debug, info, trace};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
+use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -21,59 +21,104 @@ pub struct ClusterManager {
     state: Arc<ClusterManagerState>,
 
     job: BlenderJob,
+
+    cancellation_token: CancellationToken,
 }
 
 impl ClusterManager {
     pub async fn new_from_job(job: BlenderJob) -> Result<Self> {
         let server_socket = TcpListener::bind("0.0.0.0:9901").await.into_diagnostic()?;
+        let cancellation_token = CancellationToken::new();
 
         Ok(Self {
             server_socket,
             state: Arc::new(ClusterManagerState::new_from_job(job.clone())),
             job,
+            cancellation_token,
         })
     }
 
-    pub async fn run_job_to_completion(&mut self) -> Result<()> {
+    pub async fn run_job_to_completion(self) -> Result<()> {
         // Keep accepting connections as long as possible.
-        let connection_acceptor = self.indefinitely_accept_connections();
+        let worker_connection_handler = Self::indefinitely_accept_connections(
+            self.server_socket,
+            self.state.clone(),
+            self.cancellation_token.clone(),
+        );
 
-        let processing_loop = self.wait_for_readiness_and_complete_job();
+        let job_processing_loop =
+            Self::wait_for_readiness_and_complete_job(self.job, self.state.clone());
 
-        try_join(connection_acceptor, processing_loop)
-            .await
-            .wrap_err_with(|| {
-                miette!("Errored while running connection acceptor / processing loop.")
-            })?;
+        let connection_acceptor_handle = tokio::spawn(worker_connection_handler);
+        job_processing_loop.await?;
+
+        trace!("Setting cancellation token to true.");
+        self.cancellation_token.cancel();
+
+        trace!("Waiting for connection acceptor to join worker connections and stop.");
+        connection_acceptor_handle.await.into_diagnostic()??;
 
         Ok(())
     }
 
-    async fn indefinitely_accept_connections(&self) -> Result<()> {
+    async fn indefinitely_accept_connections(
+        server_socket: TcpListener,
+        state: Arc<ClusterManagerState>,
+        cancellation_token: CancellationToken,
+    ) -> Result<()> {
         loop {
-            let (stream, address) = self
-                .server_socket
-                .accept()
-                .await
-                .into_diagnostic()
-                .wrap_err_with(|| miette!("Could not accept socket connection."))?;
+            if let Ok(incoming_connection) =
+                tokio::time::timeout(Duration::from_secs(2), server_socket.accept()).await
+            {
+                let (stream, address) = incoming_connection
+                    .into_diagnostic()
+                    .wrap_err_with(|| miette!("Could not accept incoming connection."))?;
 
-            tokio::spawn(Self::accept_worker(
-                self.state.clone(),
-                address,
-                stream,
-            ));
+                tokio::spawn(Self::accept_worker(
+                    state.clone(),
+                    address,
+                    stream,
+                    cancellation_token.clone(),
+                ));
+            }
+
+            if cancellation_token.cancelled() {
+                info!("Waiting for all worker connections to drop (cluster stopping).");
+                {
+                    let mut locked_workers = state.workers.lock().await;
+                    for (address, worker) in locked_workers.drain() {
+                        trace!(
+                            "Joining worker: \"{}:{}\"",
+                            address.ip(),
+                            address.port()
+                        );
+                        worker.join().await?;
+                    }
+                }
+
+                info!("Stopping worker connection acceptor (cluster stopping).");
+                break;
+            }
         }
+
+        Ok(())
     }
 
     async fn accept_worker(
         state: Arc<ClusterManagerState>,
         address: SocketAddr,
         tcp_stream: TcpStream,
+        cancellation_token: CancellationToken,
     ) -> Result<()> {
-        let worker = Worker::new_with_accept_and_handshake(tcp_stream, address, state.clone())
-            .await
-            .wrap_err_with(|| miette!("Could not create worker."))?;
+        // TODO What happens when the worker disconnects?
+        let worker = Worker::new_with_accept_and_handshake(
+            tcp_stream,
+            address,
+            state.clone(),
+            cancellation_token,
+        )
+        .await
+        .wrap_err_with(|| miette!("Could not create worker."))?;
 
         // Put the just-accepted client into the client map.
         {
@@ -81,37 +126,38 @@ impl ClusterManager {
             workers_locked.insert(address, worker);
         }
 
-        // TODO What happens when the worker disconnects?
-
         Ok(())
     }
 
-    async fn wait_for_readiness_and_complete_job(&self) -> Result<()> {
+    async fn wait_for_readiness_and_complete_job(
+        job: BlenderJob,
+        state: Arc<ClusterManagerState>,
+    ) -> Result<()> {
         info!(
             "Waiting for at least {} workers to connect before starting job.",
-            self.job.wait_for_number_of_workers
+            job.wait_for_number_of_workers
         );
 
         loop {
             let num_clients = {
-                let workers_locked = &self.state.workers.lock().await;
+                let workers_locked = &state.workers.lock().await;
                 workers_locked.len()
             };
 
-            if num_clients >= self.job.wait_for_number_of_workers {
+            if num_clients >= job.wait_for_number_of_workers {
                 break;
             }
 
             debug!(
                 "{}/{} clients connected - waiting before starting job.",
-                num_clients, self.job.wait_for_number_of_workers
+                num_clients, job.wait_for_number_of_workers
             );
 
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
         let num_clients = {
-            let workers_locked = &self.state.workers.lock().await;
+            let workers_locked = &state.workers.lock().await;
             workers_locked.len()
         };
 
@@ -122,14 +168,13 @@ impl ClusterManager {
 
         loop {
             trace!("Checking if all frames have been finished.");
-            if self.state.all_frames_finished().await {
-                info!("All frames have been finished!");
-                return Ok(());
+            if state.all_frames_finished().await {
+                break;
             }
 
             // Queue frames onto worker that don't have any queued frames yet.
             trace!("Locking worker list and distributing pending frames.");
-            let mut workers_locked = self.state.workers.lock().await;
+            let mut workers_locked = state.workers.lock().await;
             for worker in workers_locked.values_mut() {
                 if worker.has_empty_queue().await {
                     trace!(
@@ -141,7 +186,7 @@ impl ClusterManager {
                      * Find next pending frame and queue it on this worker (if available).
                      */
 
-                    let next_frame_index = match self.state.next_pending_frame().await {
+                    let next_frame_index = match state.next_pending_frame().await {
                         Some(frame_index) => frame_index,
                         None => {
                             break;
@@ -153,11 +198,9 @@ impl ClusterManager {
                         next_frame_index, worker.address
                     );
 
-                    worker
-                        .queue_frame(self.job.clone(), next_frame_index)
-                        .await?;
+                    worker.queue_frame(job.clone(), next_frame_index).await?;
 
-                    self.state
+                    state
                         .mark_frame_as_queued_on_worker(worker.address, next_frame_index)
                         .await?;
                 }
@@ -167,5 +210,8 @@ impl ClusterManager {
 
             tokio::time::sleep(Duration::from_secs_f64(0.25f64)).await;
         }
+
+        info!("All frames have been finished!");
+        Ok(())
     }
 }

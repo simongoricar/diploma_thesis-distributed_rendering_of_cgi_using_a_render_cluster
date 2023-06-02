@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
-use log::{info, warn};
+use log::{info, trace, warn};
 use miette::{miette, IntoDiagnostic};
 use miette::{Context, Result};
+use shared::cancellation::CancellationToken;
 use shared::messages::heartbeat::WorkerHeartbeatResponse;
 use shared::messages::queue::{
     WorkerFrameQueueAddResponse,
@@ -40,13 +41,15 @@ pub struct WorkerEventDispatcher {
 
     /// `JoinHandle` for the async task that is running this dispatcher.
     /// As long as this task is running, receivers from this dispatcher will receive incoming messages.
-    #[allow(dead_code)]
     task_join_handle: JoinHandle<()>,
 }
 
 impl WorkerEventDispatcher {
     /// Initialize a new `WorkerEventDispatcher`, consuming the WebSocket connection's async receiver channel.
-    pub async fn new(websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>) -> Self {
+    pub async fn new(
+        websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>,
+        cluster_cancellation_token: CancellationToken,
+    ) -> Self {
         let (heartbeat_tx, _) = broadcast::channel::<WorkerHeartbeatResponse>(512);
         let (queue_item_add_tx, _) = broadcast::channel::<WorkerFrameQueueAddResponse>(512);
         let (queue_item_remove_tx, _) = broadcast::channel::<WorkerFrameQueueRemoveResponse>(512);
@@ -72,6 +75,7 @@ impl WorkerEventDispatcher {
         let dispatcher_join_handle = tokio::spawn(Self::run(
             senders.clone(),
             websocket_receiver_channel,
+            cluster_cancellation_token,
         ));
 
         Self {
@@ -80,20 +84,45 @@ impl WorkerEventDispatcher {
         }
     }
 
+    pub async fn join(self) -> Result<()> {
+        self.task_join_handle.await.into_diagnostic()
+    }
+
     /// Run the event dispatcher indefinitely, reading the incoming WebSocket messages
     /// and broadcasting them to subscribed `tokio::broadcast::Receiver`s.
     async fn run(
         senders: EventSenders,
         mut websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>,
+        cluster_cancellation_token: CancellationToken,
     ) {
         info!("WorkerEventDispatcher: Running event distribution loop.");
 
         loop {
-            let next_message = match websocket_receiver_channel.next().await {
-                Some(message) => message,
-                None => {
-                    warn!("WorkerEventDispatcher: Can't receive message from channel, aborting event dispatcher task.");
-                    return;
+            if cluster_cancellation_token.cancelled() {
+                trace!("WorkerEventDispatcher: Stopping (cluster stopping).");
+                break;
+            }
+
+            let next_message = match tokio::time::timeout(
+                Duration::from_secs(2),
+                websocket_receiver_channel.next(),
+            )
+            .await
+            {
+                Ok(optional_message) => match optional_message {
+                    Some(message) => message,
+                    None => {
+                        if cluster_cancellation_token.cancelled() {
+                            trace!("WorkerEventDispatcher: Stopping (cluster stopping).");
+                            break;
+                        }
+
+                        warn!("WorkerEventDispatcher: Can't receive message from channel, aborting event dispatcher task.");
+                        return;
+                    }
+                },
+                Err(_) => {
+                    continue;
                 }
             };
 

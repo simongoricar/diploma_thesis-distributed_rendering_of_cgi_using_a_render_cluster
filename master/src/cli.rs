@@ -5,10 +5,10 @@ pub struct CLIArgs {
     #[command(subcommand)]
     pub command: CLICommand,
 
-    #[arg(short = 'h', long = "host", help = "Host to bind the server to.")]
+    #[arg(long = "host", help = "Host to bind the server to.")]
     pub bind_to_host: String,
 
-    #[arg(short = 'p', long = "port", help = "Port to bind the server to.")]
+    #[arg(long = "port", help = "Port to bind the server to.")]
     pub bind_to_port: usize,
 }
 

@@ -4,13 +4,11 @@ use clap::Parser;
 
 #[derive(Parser)]
 pub struct CLIArgs {
-    #[arg(
-        short = 'm',
-        long = "masterServer",
-        help = "Host and port of the master server.",
-        default_value = "127.0.0.1:9901"
-    )]
-    pub master_server_host_and_port: String,
+    #[arg(long = "masterServerHost", help = "Host of the master server.")]
+    pub master_server_host: String,
+
+    #[arg(long = "masterServerPort", help = "Port of the master server.")]
+    pub master_server_port: usize,
 
     #[arg(
         long = "baseDirectory",

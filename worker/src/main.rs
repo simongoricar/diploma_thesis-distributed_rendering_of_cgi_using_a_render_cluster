@@ -6,6 +6,7 @@ mod utilities;
 use clap::Parser;
 use log::info;
 use miette::{miette, Context, IntoDiagnostic, Result};
+use url::Url;
 
 use crate::cli::CLIArgs;
 use crate::connection::Worker;
@@ -17,10 +18,15 @@ async fn main() -> Result<()> {
 
     let args = CLIArgs::parse();
 
-    let server_address = url::Url::parse("ws://127.0.0.1:9901").into_diagnostic()?;
+    let master_server_address = Url::parse(&format!(
+        "ws://{}:{}",
+        args.master_server_host, args.master_server_port
+    ))
+    .into_diagnostic()
+    .wrap_err_with(|| miette!("Invalid master server address."))?;
 
     info!("Initializing ClientWorker.");
-    let client_worker = Worker::connect(server_address)
+    let client_worker = Worker::connect(master_server_address)
         .await
         .wrap_err_with(|| miette!("Could not connect to master server."))?;
 

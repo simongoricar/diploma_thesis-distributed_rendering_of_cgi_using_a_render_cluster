@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
             .wrap_err_with(|| miette!("Could not load Blender job from file."))?;
 
         info!("Initializing cluster manager.");
-        let manager = ClusterManager::new_from_job(job)
+        let manager = ClusterManager::new_from_job(args.bind_to_host, args.bind_to_port, job)
             .await
             .wrap_err_with(|| miette!("Could not initialize cluster manager."))?;
 

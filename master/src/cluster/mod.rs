@@ -28,8 +28,10 @@ pub struct ClusterManager {
 }
 
 impl ClusterManager {
-    pub async fn new_from_job(job: BlenderJob) -> Result<Self> {
-        let server_socket = TcpListener::bind("0.0.0.0:9901").await.into_diagnostic()?;
+    pub async fn new_from_job(host: String, port: usize, job: BlenderJob) -> Result<Self> {
+        let server_socket = TcpListener::bind(format!("{host}:{port}"))
+            .await
+            .into_diagnostic()?;
         let cancellation_token = CancellationToken::new();
 
         Ok(Self {

@@ -11,6 +11,7 @@ use url::Url;
 use crate::cli::CLIArgs;
 use crate::connection::Worker;
 use crate::rendering::runner::BlenderJobRunner;
+use crate::utilities::parse_with_tilde_support;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -31,10 +32,13 @@ async fn main() -> Result<()> {
         .wrap_err_with(|| miette!("Could not connect to master server."))?;
 
     info!("Initializing BlenderJobRunner.");
-    let runner = BlenderJobRunner::new(
-        args.blender_binary_path.clone(),
-        args.base_directory_path.clone(),
-    )?;
+
+    let blender_binary_path = parse_with_tilde_support(&args.blender_binary_path)
+        .wrap_err_with(|| miette!("Could not parse blender binary path with tilde support."))?;
+    let base_directory_path = parse_with_tilde_support(&args.base_directory_path)
+        .wrap_err_with(|| miette!("Could not parse base directory path with tilde support."))?;
+
+    let runner = BlenderJobRunner::new(blender_binary_path, base_directory_path)?;
 
     info!("Running worker indefinitely.");
     client_worker

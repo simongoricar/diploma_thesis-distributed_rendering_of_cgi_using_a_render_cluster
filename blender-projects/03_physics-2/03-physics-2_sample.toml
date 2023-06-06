@@ -1,0 +1,13 @@
+job_name = "03_physics-2_6f"
+job_description = "Simple physics animation V2 (6 sample frames)."
+
+project_file_path = "%BASE%/blender-projects/03_physics-2/03_physics-2.blend"
+
+frame_range_from = 80
+frame_range_to = 86
+
+wait_for_number_of_workers = 2
+
+output_directory_path = "%BASE%/blender-projects/03_physics-2/output"
+output_file_name_format = "#####"
+output_file_format = "PNG"

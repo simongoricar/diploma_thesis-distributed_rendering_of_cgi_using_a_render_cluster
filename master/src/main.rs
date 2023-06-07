@@ -51,6 +51,9 @@ async fn main() -> Result<()> {
             .collect::<Result<Vec<(SocketAddr, WorkerPerformance)>>>()?;
 
 
+        /*
+         * Individual worker statistics
+         */
         println!("Worker performance results:");
         println!();
 
@@ -101,10 +104,10 @@ async fn main() -> Result<()> {
             println!();
         }
 
-
-        println!("[Total]");
-
-        // TODO Total on-job time?
+        /*
+         * Cumulative worker statistics
+         */
+        println!("[Cumulative]");
 
         println!(
             "Cumulative rendering time = {:.6} seconds.",
@@ -127,6 +130,18 @@ async fn main() -> Result<()> {
             "Cumulative frames stolen from workers' queues before rendered = {}",
             cumulative_frames_stolen
         );
+
+        println!();
+
+        /*
+         * Master statistics
+         */
+        println!("[Master]");
+
+        println!(
+            "Total job duration = {:.6} seconds.",
+            master_performance.total_time.as_secs_f64()
+        )
     }
 
     Ok(())

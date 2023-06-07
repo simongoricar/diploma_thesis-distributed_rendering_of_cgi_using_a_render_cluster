@@ -7,8 +7,8 @@ use log::{error, info};
 use shared::jobs::BlenderJob;
 use shared::messages::queue::{FrameQueueRemoveResult, WorkerFrameQueueItemFinishedEvent};
 use shared::messages::traits::IntoWebSocketMessage;
+use shared::messages::OutgoingMessage;
 use tokio::sync::Mutex;
-use tokio_tungstenite::tungstenite;
 
 use crate::rendering::runner::BlenderJobRunner;
 
@@ -41,13 +41,13 @@ impl WorkerQueueFrame {
 pub struct WorkerAutomaticQueue {
     runner: Arc<BlenderJobRunner>,
     frames: Arc<Mutex<Vec<WorkerQueueFrame>>>,
-    message_sender: Arc<UnboundedSender<tungstenite::Message>>,
+    message_sender: Arc<UnboundedSender<OutgoingMessage>>,
 }
 
 impl WorkerAutomaticQueue {
     pub fn new(
         runner: BlenderJobRunner,
-        message_sender: Arc<UnboundedSender<tungstenite::Message>>,
+        message_sender: Arc<UnboundedSender<OutgoingMessage>>,
     ) -> Self {
         Self {
             runner: Arc::new(runner),
@@ -67,7 +67,7 @@ impl WorkerAutomaticQueue {
     async fn run_automatic_queue(
         runner: Arc<BlenderJobRunner>,
         frames: Arc<Mutex<Vec<WorkerQueueFrame>>>,
-        message_sender: Arc<UnboundedSender<tungstenite::Message>>,
+        message_sender: Arc<UnboundedSender<OutgoingMessage>>,
     ) {
         let is_currently_running = Arc::new(AtomicBool::new(false));
 
@@ -109,7 +109,7 @@ impl WorkerAutomaticQueue {
 
     async fn render_frame_and_report_through_websocket(
         runner: Arc<BlenderJobRunner>,
-        message_sender: Arc<UnboundedSender<tungstenite::Message>>,
+        message_sender: Arc<UnboundedSender<OutgoingMessage>>,
         running_flag: Arc<AtomicBool>,
         frames: Arc<Mutex<Vec<WorkerQueueFrame>>>,
         job: BlenderJob,
@@ -141,7 +141,7 @@ impl WorkerAutomaticQueue {
                 // Report back to master that we finished this frame.
                 let send_result = WorkerFrameQueueItemFinishedEvent::new_ok(job_name, frame_index)
                     .into_ws_message()
-                    .send(&message_sender);
+                    .send_through_channel(&message_sender);
 
                 if let Err(error) = send_result {
                     error!(

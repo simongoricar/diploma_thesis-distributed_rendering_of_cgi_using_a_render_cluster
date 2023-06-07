@@ -27,10 +27,15 @@ use shared::messages::queue::{
     WorkerFrameQueueRemoveResponse,
 };
 use shared::messages::traits::IntoWebSocketMessage;
-use shared::messages::{parse_websocket_message, receive_exact_message, WebSocketMessage};
+use shared::messages::{
+    parse_websocket_message,
+    receive_exact_message,
+    OutgoingMessage,
+    WebSocketMessage,
+};
 use shared::results::worker_trace::WorkerTraceBuilder;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -40,70 +45,60 @@ use crate::connection::event_dispatcher::MasterEventDispatcher;
 use crate::rendering::queue::WorkerAutomaticQueue;
 use crate::rendering::runner::BlenderJobRunner;
 
-
 /// Worker instance. Manages the connection with the master server, receives requests
 /// and performs the rendering as instructed.
-pub struct Worker {
-    ws_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
-    ws_stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-
-    sender_tx: UnboundedSender<Message>,
-    sender_rx: UnboundedReceiver<Message>,
-
-    receiver_tx: UnboundedSender<WebSocketMessage>,
-    receiver_rx: UnboundedReceiver<WebSocketMessage>,
-}
+pub struct Worker {}
 
 impl Worker {
-    /// Connect to the master server
-    pub async fn connect(master_server_url: Url) -> Result<Self> {
+    /// This connects and performs the initial handshake with the master server, then runs the worker,
+    /// spawning several async tasks that receive, send and parse messages.
+    ///
+    /// Whenever a frame is queued, we render it and respond with the item finished event
+    /// (but only one frame at a time).
+    pub async fn connect_and_run_to_job_completion(
+        master_server_url: Url,
+        blender_runner: BlenderJobRunner,
+    ) -> Result<()> {
         let (stream, _) = connect_async(master_server_url).await.into_diagnostic()?;
 
         // Split the WebSocket stream and prepare async channels, but don't actually perform the handshake and other stuff yet.
         // See `run_forever` for running the worker.
         let (ws_write, ws_read) = stream.split();
 
-        let (ws_sender_tx, ws_sender_rx) = futures_channel::mpsc::unbounded::<Message>();
+        let (ws_sender_tx, ws_sender_rx) = futures_channel::mpsc::unbounded::<OutgoingMessage>();
         let (ws_receiver_tx, ws_receiver_rx) =
             futures_channel::mpsc::unbounded::<WebSocketMessage>();
 
-        Ok(Self {
-            ws_sink: ws_write,
-            ws_stream: ws_read,
-            sender_tx: ws_sender_tx,
-            sender_rx: ws_sender_rx,
-            receiver_tx: ws_receiver_tx,
-            receiver_rx: ws_receiver_rx,
-        })
-    }
-
-    /// This performs the initial handshake with the master server, then runs the worker,
-    /// spawning several async tasks that receive, send and parse messages.
-    ///
-    /// Whenever a frame is queued, we render it and respond with the item finished event
-    /// (but only one frame at a time).
-    pub async fn run_to_job_completion(self, blender_runner: BlenderJobRunner) -> Result<()> {
         let cancellation_token = CancellationToken::new();
+        // TODO Integrate into job runner
         let trace_builder = WorkerTraceBuilder::new_empty();
 
-        let sender_channel = Arc::new(self.sender_tx);
-        let receiver_channel = Arc::new(Mutex::new(self.receiver_rx));
+        let sender_channel = Arc::new(ws_sender_tx);
+        let receiver_channel = Arc::new(Mutex::new(ws_receiver_rx));
+
 
         let mut worker_connection_future_set: JoinSet<Result<()>> = JoinSet::new();
 
+
         let incoming_messages_handler = Self::forward_incoming_messages_through_channel(
-            self.ws_stream,
-            self.receiver_tx,
+            ws_read,
+            ws_receiver_tx,
             cancellation_token.clone(),
         );
         worker_connection_future_set.spawn(incoming_messages_handler);
 
+
+        let (outgoing_sender_status_watcher_tx, outgoing_sender_status_watcher_rx) =
+            watch::channel(true);
+
         let outgoing_messages_handler = Self::forward_queued_outgoing_messages_through_websocket(
-            self.ws_sink,
-            self.sender_rx,
+            ws_write,
+            ws_sender_rx,
+            outgoing_sender_status_watcher_tx,
             cancellation_token.clone(),
         );
         worker_connection_future_set.spawn(outgoing_messages_handler);
+
 
         let handshake_handle = worker_connection_future_set.spawn(Self::perform_handshake(
             sender_channel.clone(),
@@ -117,6 +112,7 @@ impl Worker {
                 "BUG: Incorrect task completed (expected handshake)."
             ));
         }
+
 
         let event_dispatcher = MasterEventDispatcher::new(
             Arc::try_unwrap(receiver_channel)
@@ -132,6 +128,7 @@ impl Worker {
 
         let event_dispatcher_arc = Arc::new(event_dispatcher);
 
+
         worker_connection_future_set.spawn(Self::respond_to_heartbeats(
             event_dispatcher_arc.clone(),
             sender_channel.clone(),
@@ -143,10 +140,12 @@ impl Worker {
             event_dispatcher_arc.clone(),
             sender_channel.clone(),
             trace_builder,
+            outgoing_sender_status_watcher_rx,
             cancellation_token.clone(),
         ));
 
         info!("Connection fully established and async tasks are running.");
+
 
         while !worker_connection_future_set.is_empty() {
             worker_connection_future_set.join_next().await;
@@ -162,7 +161,7 @@ impl Worker {
     /// Performs our internal WebSocket handshake
     /// (master handshake request, worker response, master acknowledgement).
     async fn perform_handshake(
-        sender_channel: Arc<UnboundedSender<Message>>,
+        sender_channel: Arc<UnboundedSender<OutgoingMessage>>,
         receiver_channel: Arc<Mutex<UnboundedReceiver<WebSocketMessage>>>,
     ) -> Result<()> {
         info!("Waiting for handshake request from master server.");
@@ -181,7 +180,7 @@ impl Worker {
 
         WorkerHandshakeResponse::new("1.0.0")
             .into_ws_message()
-            .send(&sender_channel)
+            .send_through_channel(&sender_channel)
             .wrap_err_with(|| miette!("Could not send handshake response."))?;
 
         debug!("Sent handshake response, waiting for acknowledgement.");
@@ -211,7 +210,8 @@ impl Worker {
     /// Runs as long as the channel can be read from or as long as the WebSocket sink can be written to.
     async fn forward_queued_outgoing_messages_through_websocket(
         mut ws_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
-        mut message_send_queue: UnboundedReceiver<Message>,
+        mut message_send_queue: UnboundedReceiver<OutgoingMessage>,
+        self_status_watch_sender: watch::Sender<bool>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         debug!("Running task loop: forwarding messages from send queue through WebSocket.");
@@ -223,13 +223,34 @@ impl Worker {
                 let outgoing_message = outgoing_message
                     .ok_or_else(|| miette!("Can't read outgoing messages from channel!"))?;
 
-                ws_sink
-                    .send(outgoing_message)
-                    .await
-                    .into_diagnostic()
-                    .wrap_err_with(|| {
-                        miette!("Could not send queued outgoing message, sink failed.")
-                    })?;
+                match outgoing_message {
+                    OutgoingMessage::TungsteniteMessage(raw_message) => {
+                        ws_sink
+                            .send(raw_message)
+                            .await
+                            .into_diagnostic()
+                            .wrap_err_with(|| {
+                                miette!("Could not send raw tungstenite message, sink failed.")
+                            })?;
+                    }
+                    OutgoingMessage::WebSocketMessage(ws_message) => {
+                        let raw_message = ws_message
+                            .to_websocket_message()
+                            .wrap_err_with(|| miette!("Could not serialize WebSocketMessage."))?;
+
+                        ws_sink
+                            .send(raw_message)
+                            .await
+                            .into_diagnostic()
+                            .wrap_err_with(|| {
+                                miette!("Could not send WebSocket message, sink failed.")
+                            })?;
+                    }
+                    OutgoingMessage::CloseConnectionControlMessage => {
+                        info!("Stopping outgoing messages sender (received control message).");
+                        break;
+                    }
+                }
             }
 
             if cancellation_token.cancelled() {
@@ -237,6 +258,13 @@ impl Worker {
                 break;
             }
         }
+
+        self_status_watch_sender
+            .send(false)
+            .into_diagnostic()
+            .wrap_err_with(|| {
+                miette!("Could not set outgoing messages sender's status to false.")
+            })?;
 
         Ok(())
     }
@@ -295,7 +323,7 @@ impl Worker {
     /// Runs as long as the async sender channel can be written to.
     async fn respond_to_heartbeats(
         event_dispatcher: Arc<MasterEventDispatcher>,
-        sender_channel: Arc<UnboundedSender<Message>>,
+        sender_channel: Arc<UnboundedSender<OutgoingMessage>>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         debug!("Running task loop: responding to heartbeats.");
@@ -317,7 +345,7 @@ impl Worker {
 
                 WorkerHeartbeatResponse::new()
                     .into_ws_message()
-                    .send(&sender_channel)
+                    .send_through_channel(&sender_channel)
                     .wrap_err_with(|| {
                         miette!("Could not send heartbeat response through sender channel.")
                     })?;
@@ -340,8 +368,9 @@ impl Worker {
     async fn manage_incoming_messages(
         blender_runner: BlenderJobRunner,
         event_dispatcher: Arc<MasterEventDispatcher>,
-        sender_channel: Arc<UnboundedSender<Message>>,
+        sender_channel: Arc<UnboundedSender<OutgoingMessage>>,
         tracer: WorkerTraceBuilder,
+        mut outgoing_sender_status_watch_receiver: watch::Receiver<bool>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         debug!("Running task loop: handling incoming messages.");
@@ -374,7 +403,7 @@ impl Worker {
 
                     WorkerFrameQueueAddResponse::new_ok(queue_add_request.message_request_id)
                         .into_ws_message()
-                        .send(&sender_channel)
+                        .send_through_channel(&sender_channel)
                         .wrap_err_with(|| miette!("Could not send frame add response."))?;
                 },
                 queue_remove_request = queue_remove_request_receiver.recv() => {
@@ -399,7 +428,7 @@ impl Worker {
                         remove_result
                     )
                         .into_ws_message()
-                        .send(&sender_channel)
+                        .send_through_channel(&sender_channel)
                         .wrap_err_with(|| miette!("Could not send frame queue removal response."))?;
                 },
                 job_started_event = job_started_event_receiver.recv() => {
@@ -424,15 +453,21 @@ impl Worker {
                         trace,
                     )
                         .into_ws_message()
-                        .send(&sender_channel)
+                        .send_through_channel(&sender_channel)
                         .wrap_err_with(|| miette!("Could not send job finished response."))?;
 
-                    // TODO Find a better way to wait for the final outgoing messages.
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    // Send the final message through the outgoing channel.
+                    sender_channel
+                        .unbounded_send(OutgoingMessage::CloseConnectionControlMessage)
+                        .into_diagnostic()
+                        .wrap_err_with(|| miette!("Could not send final control message."))?;
+
+                    let _ = outgoing_sender_status_watch_receiver.wait_for(|value| !(*value)).await;
 
                     // Cancel the entire worker set of tasks.
+                    debug!("Stopping incoming messages manager (worker stopping).");
                     cancellation_token.cancel();
-                    trace!("Stopping incoming messages manager (worker stopping).");
+
                     break;
                 },
                 _ = tokio::time::sleep(Duration::from_secs(2)) => {

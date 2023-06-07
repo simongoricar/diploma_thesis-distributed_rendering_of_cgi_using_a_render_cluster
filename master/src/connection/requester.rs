@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use futures_channel::mpsc::UnboundedSender;
 use miette::{miette, Context, Result};
 use shared::jobs::BlenderJob;
 use shared::messages::job::MasterJobFinishedRequest;
@@ -10,24 +9,20 @@ use shared::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
 };
-use shared::messages::traits::IntoWebSocketMessage;
 use shared::results::worker_trace::WorkerTrace;
-use tokio_tungstenite::tungstenite::Message;
 
-use crate::connection::event_dispatcher::WorkerEventDispatcher;
+use crate::connection::receiver::WorkerReceiver;
+use crate::connection::sender::SenderHandle;
 
 pub struct WorkerRequester {
-    sender_channel: Arc<UnboundedSender<Message>>,
-    event_dispatcher: Arc<WorkerEventDispatcher>,
+    sender_handle: SenderHandle,
+    event_dispatcher: Arc<WorkerReceiver>,
 }
 
 impl WorkerRequester {
-    pub fn new(
-        sender_channel: Arc<UnboundedSender<Message>>,
-        event_dispatcher: Arc<WorkerEventDispatcher>,
-    ) -> Self {
+    pub fn new(sender_handle: SenderHandle, event_dispatcher: Arc<WorkerReceiver>) -> Self {
         Self {
-            sender_channel,
+            sender_handle,
             event_dispatcher,
         }
     }
@@ -44,10 +39,7 @@ impl WorkerRequester {
         let request = MasterFrameQueueAddRequest::new(job, frame_index);
         let request_id = request.message_request_id;
 
-        request
-            .into_ws_message()
-            .send(&self.sender_channel)
-            .wrap_err_with(|| miette!("Could not send frame queue add request."))?;
+        self.sender_handle.send_message(request).await?;
 
         let response = self
             .event_dispatcher
@@ -71,10 +63,7 @@ impl WorkerRequester {
         let request = MasterFrameQueueRemoveRequest::new(job_name, frame_index);
         let request_id = request.message_request_id;
 
-        request
-            .into_ws_message()
-            .send(&self.sender_channel)
-            .wrap_err_with(|| miette!("Could not send frame queue remove request."))?;
+        self.sender_handle.send_message(request).await?;
 
         let response = self
             .event_dispatcher
@@ -90,14 +79,11 @@ impl WorkerRequester {
         Ok(response.result)
     }
 
-    pub async fn finish_job(&self) -> Result<WorkerTrace> {
+    pub async fn finish_job_and_get_trace(&self) -> Result<WorkerTrace> {
         let request = MasterJobFinishedRequest::new();
         let request_id = request.message_request_id;
 
-        request
-            .into_ws_message()
-            .send(&self.sender_channel)
-            .wrap_err_with(|| miette!("Could not send job finished request."))?;
+        self.sender_handle.send_message(request).await?;
 
         let response = self
             .event_dispatcher

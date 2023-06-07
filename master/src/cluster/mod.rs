@@ -7,6 +7,7 @@ use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
+use shared::messages::job::MasterJobStartedEvent;
 use shared::results::worker_trace::WorkerTrace;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -61,12 +62,19 @@ impl ClusterManager {
             let locked_workers = self.state.workers.lock().await;
 
             for worker in locked_workers.values() {
-                let worker_trace = worker.requester.finish_job().await.wrap_err_with(|| {
-                    miette!(
-                        "Could not receive trace from worker {:?}!",
-                        worker.address
-                    )
-                })?;
+                // Prevents the per-worker heartbeat task from sending any more messages through the WebSocket.
+                worker.heartbeat_cancellation_token.cancel();
+
+                let worker_trace = worker
+                    .requester
+                    .finish_job_and_get_trace()
+                    .await
+                    .wrap_err_with(|| {
+                        miette!(
+                            "Could not receive trace from worker {:?}!",
+                            worker.address
+                        )
+                    })?;
 
                 worker_traces.push((worker.address, worker_trace));
             }
@@ -130,11 +138,14 @@ impl ClusterManager {
         tcp_stream: TcpStream,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
+        let heartbeat_cancellation_token = CancellationToken::new();
+
         // TODO What happens when the worker disconnects?
         let worker = Worker::new_with_accept_and_handshake(
             tcp_stream,
             address,
             state.clone(),
+            heartbeat_cancellation_token,
             cancellation_token,
         )
         .await
@@ -176,15 +187,33 @@ impl ClusterManager {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
-        let num_clients = {
-            let workers_locked = &state.workers.lock().await;
-            workers_locked.len()
-        };
 
-        info!(
-            "READY! {} clients connected, starting job.",
-            num_clients
-        );
+        // Send job starting event to all clients
+        {
+            let workers_locked = &state.workers.lock().await;
+
+            let workers_amount = workers_locked.len();
+            info!(
+                "READY! {} workers are connected, starting job!",
+                workers_amount
+            );
+
+            for (_, worker) in workers_locked.iter() {
+                let worker_sender_handle = worker.sender.sender_handle();
+
+                worker_sender_handle
+                    .send_message(MasterJobStartedEvent::new())
+                    .await
+                    .wrap_err_with(|| {
+                        miette!(
+                            "Could not send job started event to worker {:?}",
+                            worker.address
+                        )
+                    })?;
+            }
+        }
+
+        // FIXME If a client connects after a job has started, they will not receive the job start event.
 
         loop {
             trace!("Checking if all frames have been finished.");

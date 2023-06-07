@@ -26,11 +26,6 @@ async fn main() -> Result<()> {
     .into_diagnostic()
     .wrap_err_with(|| miette!("Invalid master server address."))?;
 
-    info!("Initializing ClientWorker.");
-    let client_worker = Worker::connect(master_server_address)
-        .await
-        .wrap_err_with(|| miette!("Could not connect to master server."))?;
-
     info!("Initializing BlenderJobRunner.");
 
     let blender_binary_path = parse_with_tilde_support(&args.blender_binary_path)
@@ -40,9 +35,9 @@ async fn main() -> Result<()> {
 
     let runner = BlenderJobRunner::new(blender_binary_path, base_directory_path)?;
 
-    info!("Running worker indefinitely.");
-    client_worker
-        .run_to_job_completion(runner)
+    info!("Running worker until job is complete.");
+
+    Worker::connect_and_run_to_job_completion(master_server_address, runner)
         .await
         .wrap_err_with(|| miette!("Errored while running worker"))?;
 

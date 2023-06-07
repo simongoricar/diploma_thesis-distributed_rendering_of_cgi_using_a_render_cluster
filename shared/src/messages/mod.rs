@@ -1,4 +1,5 @@
-use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures_channel::mpsc::UnboundedReceiver;
+use futures_channel::oneshot;
 use futures_util::stream::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,7 @@ use crate::messages::queue::{
     WorkerFrameQueueRemoveResponse,
 };
 use crate::messages::traits::Message;
+use crate::messages::utilities::OutgoingMessageID;
 
 pub mod handshake;
 pub mod heartbeat;
@@ -31,6 +33,31 @@ pub mod job;
 pub mod queue;
 pub mod traits;
 mod utilities;
+
+
+
+pub struct OutgoingMessage {
+    pub id: OutgoingMessageID,
+
+    pub message: tungstenite::Message,
+
+    pub oneshot_sender: oneshot::Sender<()>,
+}
+
+impl OutgoingMessage {
+    pub fn from_message(outgoing_message: tungstenite::Message) -> (Self, oneshot::Receiver<()>) {
+        let (oneshot_channel_tx, oneshot_channel_rx) = oneshot::channel::<()>();
+
+        let new_self = Self {
+            id: OutgoingMessageID::generate(),
+            message: outgoing_message,
+            oneshot_sender: oneshot_channel_tx,
+        };
+
+        (new_self, oneshot_channel_rx)
+    }
+}
+
 
 
 pub fn parse_websocket_message(message: tungstenite::Message) -> Result<Option<WebSocketMessage>> {
@@ -138,21 +165,12 @@ impl WebSocketMessage {
         }
     }
 
-    pub fn to_websocket_message(&self) -> Result<tungstenite::Message> {
+    pub fn to_tungstenite_message(&self) -> Result<tungstenite::Message> {
         let serialized_string = serde_json::to_string(self)
             .into_diagnostic()
             .wrap_err_with(|| miette!("Could not serialize to JSON."))?;
 
         Ok(tungstenite::Message::Text(serialized_string))
-    }
-
-    pub fn send(&self, sender: &UnboundedSender<tungstenite::Message>) -> Result<()> {
-        sender
-            .unbounded_send(self.to_websocket_message()?)
-            .into_diagnostic()
-            .wrap_err_with(|| miette!("Could not queue WebSocket message."))?;
-
-        Ok(())
     }
 
     pub fn type_name(&self) -> &'static str {

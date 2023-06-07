@@ -44,7 +44,7 @@ impl TryFrom<WebSocketMessage> for MasterHandshakeRequest {
 
 pub static WORKER_HANDSHAKE_RESPONSE_TYPE_NAME: &str = "handshake_response";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerHandshakeResponse {
     pub worker_version: String,
 }

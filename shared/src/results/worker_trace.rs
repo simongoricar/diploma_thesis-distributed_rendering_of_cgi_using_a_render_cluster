@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use log::debug;
 use miette::{miette, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -70,9 +71,15 @@ impl WorkerTraceBuilder {
     }
 
     pub async fn build(&self) -> Result<WorkerTrace> {
-        let trace = &self.0.lock().await;
+        let trace = self.0.lock().await;
 
-        Ok(WorkerTrace {
+        // DEBUGONLY
+        debug!("Trace locked, building!");
+        debug!("Job start time is {:?}", trace.job_start_time);
+        debug!("Job finish time is {:?}", trace.job_finish_time);
+
+        // FIXME Why the hell does this block?!?!?! Wait, does it error?
+        let result = Ok(WorkerTrace {
             total_queued_frames: trace.total_queued_frames,
             total_queued_frames_removed_from_queue: trace.total_queued_frames_removed_from_queue,
             job_start_time: trace
@@ -81,25 +88,35 @@ impl WorkerTraceBuilder {
             job_finish_time: trace
                 .job_finish_time
                 .ok_or_else(|| miette!("Missing job finish time, can't build."))?,
-            frame_render_times: trace.frame_render_times.clone(),
-        })
+            frame_render_times: Vec::new(),
+            // frame_render_times: trace.frame_render_times.clone(),
+        });
+
+        // DEBUGONLY
+        debug!("Returning trace!");
+
+        result
     }
 
 
     pub async fn trace_new_frame_queued(&self) {
-        self.0.lock().await.total_queued_frames += 1;
+        let mut trace = self.0.lock().await;
+        trace.total_queued_frames += 1;
     }
 
     pub async fn trace_frame_stolen_from_queue(&self) {
-        self.0.lock().await.total_queued_frames_removed_from_queue += 1;
+        let mut trace = self.0.lock().await;
+        trace.total_queued_frames_removed_from_queue += 1;
     }
 
     pub async fn set_job_start_time(&self, start_time: SystemTime) {
-        let _ = self.0.lock().await.job_start_time.insert(start_time);
+        let mut trace = self.0.lock().await;
+        trace.job_start_time = Some(start_time);
     }
 
     pub async fn set_job_finish_time(&self, finish_time: SystemTime) {
-        let _ = self.0.lock().await.job_finish_time.insert(finish_time);
+        let mut trace = self.0.lock().await;
+        trace.job_finish_time = Some(finish_time);
     }
 
     pub async fn trace_new_rendered_frame(
@@ -108,14 +125,12 @@ impl WorkerTraceBuilder {
         start_time: SystemTime,
         finish_time: SystemTime,
     ) {
-        self.0
-            .lock()
-            .await
-            .frame_render_times
-            .push(WorkerFrameTrace::new(
-                frame_index,
-                start_time,
-                finish_time,
-            ))
+        let mut trace = self.0.lock().await;
+
+        trace.frame_render_times.push(WorkerFrameTrace::new(
+            frame_index,
+            start_time,
+            finish_time,
+        ));
     }
 }

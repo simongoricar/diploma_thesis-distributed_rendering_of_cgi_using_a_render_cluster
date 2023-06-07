@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
-use log::{info, trace, warn};
+use log::{debug, info, trace, warn};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::heartbeat::MasterHeartbeatRequest;
@@ -106,7 +106,7 @@ impl MasterEventDispatcher {
                 match message {
                     Some(message) => message,
                     None => {
-                        warn!("MasterEventDispatcher: Can't receiver message from channel, aborting event dispatcher loop.");
+                        warn!("MasterEventDispatcher: Can't receive message from channel, aborting event dispatcher loop.");
                         return;
                     }
                 }
@@ -119,18 +119,23 @@ impl MasterEventDispatcher {
             // (as it really isn't an error, it's just that no-one will see that message as no-one is subscribed).
             match next_message {
                 WebSocketMessage::MasterHeartbeatRequest(request) => {
+                    debug!("Received message: master heartbeat request.");
                     let _ = senders.heartbeat_request.send(request);
                 }
                 WebSocketMessage::MasterFrameQueueAddRequest(request) => {
+                    debug!("Received message: master frame queue add request.");
                     let _ = senders.queue_frame_add_request.send(request);
                 }
                 WebSocketMessage::MasterFrameQueueRemoveRequest(request) => {
+                    debug!("Received message: master frame queue remove request.");
                     let _ = senders.queue_frame_remove_request.send(request);
                 }
                 WebSocketMessage::MasterJobStartedEvent(event) => {
+                    debug!("Received message: job started event.");
                     let _ = senders.job_started_event.send(event);
                 }
                 WebSocketMessage::MasterJobFinishedRequest(request) => {
+                    debug!("Received message: job finished request.");
                     let _ = senders.job_finished_request.send(request);
                 }
                 _ => {

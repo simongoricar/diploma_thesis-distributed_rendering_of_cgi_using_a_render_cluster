@@ -110,7 +110,7 @@ impl ClusterManager {
                 ));
             }
 
-            if cancellation_token.cancelled() {
+            if cancellation_token.is_cancelled() {
                 info!("Waiting for all worker connections to drop (cluster stopping).");
                 {
                     let mut locked_workers = state.workers.lock().await;

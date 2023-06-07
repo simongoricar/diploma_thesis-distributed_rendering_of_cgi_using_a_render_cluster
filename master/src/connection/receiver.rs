@@ -125,7 +125,7 @@ impl WorkerReceiver {
             let next_message_result =
                 tokio::time::timeout(Duration::from_secs(2), websocket_stream.next()).await;
 
-            if global_cancellation_token.cancelled() {
+            if global_cancellation_token.is_cancelled() {
                 trace!("WorkerReceiver: Stopping (cluster stopping).");
                 break;
             }

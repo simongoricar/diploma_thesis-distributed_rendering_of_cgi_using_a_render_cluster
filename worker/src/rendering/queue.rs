@@ -1,14 +1,15 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_channel::mpsc::UnboundedSender;
-use log::{error, info};
+use log::{debug, error, info};
+use miette::{miette, Context};
+use miette::{IntoDiagnostic, Result};
+use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
 use shared::messages::queue::{FrameQueueRemoveResult, WorkerFrameQueueItemFinishedEvent};
-use shared::messages::traits::IntoWebSocketMessage;
-use shared::messages::OutgoingMessage;
+use shared::messages::SenderHandle;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::rendering::runner::BlenderJobRunner;
 
@@ -39,84 +40,90 @@ impl WorkerQueueFrame {
 
 
 pub struct WorkerAutomaticQueue {
-    runner: Arc<BlenderJobRunner>,
     frames: Arc<Mutex<Vec<WorkerQueueFrame>>>,
-    message_sender: Arc<UnboundedSender<OutgoingMessage>>,
+
+    join_handle: JoinHandle<Result<()>>,
 }
 
 impl WorkerAutomaticQueue {
-    pub fn new(
+    pub fn initialize(
         runner: BlenderJobRunner,
-        message_sender: Arc<UnboundedSender<OutgoingMessage>>,
+        sender_handle: SenderHandle,
+        global_cancellation_token: CancellationToken,
     ) -> Self {
+        let runner_arc = Arc::new(runner);
+        let frames_arc = Arc::new(Mutex::new(Vec::new()));
+
+        let join_handle = tokio::spawn(Self::run_automatic_queue(
+            runner_arc,
+            frames_arc.clone(),
+            sender_handle,
+            global_cancellation_token,
+        ));
+
         Self {
-            runner: Arc::new(runner),
-            frames: Arc::new(Mutex::new(Vec::new())),
-            message_sender,
+            frames: frames_arc,
+            join_handle,
         }
     }
 
-    pub async fn start(&self) {
-        tokio::spawn(Self::run_automatic_queue(
-            self.runner.clone(),
-            self.frames.clone(),
-            self.message_sender.clone(),
-        ));
+    pub async fn join(self) -> Result<()> {
+        self.join_handle.await.into_diagnostic()?
     }
 
     async fn run_automatic_queue(
         runner: Arc<BlenderJobRunner>,
         frames: Arc<Mutex<Vec<WorkerQueueFrame>>>,
-        message_sender: Arc<UnboundedSender<OutgoingMessage>>,
-    ) {
-        let is_currently_running = Arc::new(AtomicBool::new(false));
-
+        sender_handle: SenderHandle,
+        global_cancellation_token: CancellationToken,
+    ) -> Result<()> {
         loop {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
 
-            if is_currently_running.load(Ordering::SeqCst) {
-                continue;
+            if global_cancellation_token.is_cancelled() {
+                debug!("Stopping automatic rendering queue (worker stopping).");
+                break;
             }
 
-            let mut locked_frames = frames.lock().await;
+            let frame = {
+                let mut locked_frames = frames.lock().await;
+                let pending_frame = locked_frames
+                    .iter_mut()
+                    .find(|frame| frame.state == WorkerFrameState::Queued);
 
-            let pending_frame = locked_frames
-                .iter_mut()
-                .find(|frame| frame.state == WorkerFrameState::Queued);
-
-            if let Some(frame) = pending_frame {
-                if !is_currently_running.load(Ordering::SeqCst) {
-                    info!(
-                        "Spawning new frame renderer: {}, frame {}",
-                        frame.job.job_name, frame.frame_index
-                    );
-
-                    is_currently_running.store(true, Ordering::SeqCst);
-                    tokio::spawn(Self::render_frame_and_report_through_websocket(
-                        runner.clone(),
-                        message_sender.clone(),
-                        is_currently_running.clone(),
-                        frames.clone(),
-                        frame.job.clone(),
-                        frame.frame_index,
-                    ));
+                match pending_frame {
+                    Some(frame) => frame.clone(),
+                    None => {
+                        continue;
+                    }
                 }
-            }
+            };
 
-            drop(locked_frames);
+            info!(
+                "Spawning new frame renderer: job {}, frame {}",
+                frame.job.job_name, frame.frame_index
+            );
+
+            Self::render_frame_and_report_through_websocket(
+                runner.clone(),
+                sender_handle.clone(),
+                frames.clone(),
+                frame.job.clone(),
+                frame.frame_index,
+            )
+            .await;
         }
+
+        Ok(())
     }
 
     async fn render_frame_and_report_through_websocket(
         runner: Arc<BlenderJobRunner>,
-        message_sender: Arc<UnboundedSender<OutgoingMessage>>,
-        running_flag: Arc<AtomicBool>,
+        sender_handle: SenderHandle,
         frames: Arc<Mutex<Vec<WorkerQueueFrame>>>,
         job: BlenderJob,
         frame_index: usize,
     ) {
-        running_flag.store(true, Ordering::SeqCst);
-
         let job_name = job.job_name.clone();
 
         {
@@ -139,16 +146,17 @@ impl WorkerAutomaticQueue {
                 );
 
                 // Report back to master that we finished this frame.
-                let send_result = WorkerFrameQueueItemFinishedEvent::new_ok(job_name, frame_index)
-                    .into_ws_message()
-                    .send_through_channel(&message_sender);
+                let send_result = sender_handle
+                    .send_message(WorkerFrameQueueItemFinishedEvent::new_ok(
+                        job_name,
+                        frame_index,
+                    ))
+                    .await
+                    .wrap_err_with(|| miette!("Failed to send frame finished event."));
 
                 if let Err(error) = send_result {
-                    error!(
-                        "Errored while sending item finished notification: {}",
-                        error
-                    );
-                };
+                    error!("Errored: {}", error);
+                }
             }
             Err(error) => {
                 error!("Errored while rendering frame: {}", error);
@@ -164,8 +172,6 @@ impl WorkerAutomaticQueue {
                 .expect("BUG: No such frame.");
             frames_locked.remove(our_frame_index);
         }
-
-        running_flag.store(false, Ordering::SeqCst);
     }
 
     pub async fn queue_frame(&self, job: BlenderJob, frame_index: usize) {

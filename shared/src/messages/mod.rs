@@ -1,4 +1,6 @@
-use futures_channel::mpsc::UnboundedReceiver;
+use std::sync::Arc;
+
+use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_channel::oneshot;
 use futures_util::stream::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
@@ -34,6 +36,36 @@ pub mod queue;
 pub mod traits;
 mod utilities;
 
+
+#[derive(Clone)]
+pub struct SenderHandle {
+    sender_channel: Arc<UnboundedSender<OutgoingMessage>>,
+}
+
+impl SenderHandle {
+    pub fn from_channel(sender: Arc<UnboundedSender<OutgoingMessage>>) -> Self {
+        Self {
+            sender_channel: sender,
+        }
+    }
+
+    pub async fn send_message<M: Into<WebSocketMessage>>(&self, message: M) -> Result<()> {
+        let (message, sent_receiver) =
+            OutgoingMessage::from_message(message.into().to_tungstenite_message()?);
+
+        self.sender_channel
+            .unbounded_send(message)
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Could not queue WebSocket message for sending."))?;
+
+        sent_receiver
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Errored while waiting for WebSocket message to be sent."))?;
+
+        Ok(())
+    }
+}
 
 
 pub struct OutgoingMessage {

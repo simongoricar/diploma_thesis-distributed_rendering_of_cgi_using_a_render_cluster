@@ -1,21 +1,29 @@
 use std::fs::create_dir_all;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use log::{debug, info};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::jobs::BlenderJob;
+use shared::results::worker_trace::WorkerTraceBuilder;
 use tokio::process::Command;
 
 use crate::utilities::parse_with_base_directory_prefix;
 
 pub struct BlenderJobRunner {
     blender_binary_path: PathBuf,
+
     base_directory_path: PathBuf,
+
+    tracer: WorkerTraceBuilder,
 }
 
 impl BlenderJobRunner {
-    pub fn new(blender_binary_path: PathBuf, base_directory_path: PathBuf) -> Result<Self> {
+    pub fn new(
+        blender_binary_path: PathBuf,
+        base_directory_path: PathBuf,
+        tracer: WorkerTraceBuilder,
+    ) -> Result<Self> {
         if !blender_binary_path.is_file() {
             return Err(miette!("Provided Blender path is not a file."));
         }
@@ -29,6 +37,7 @@ impl BlenderJobRunner {
         Ok(Self {
             blender_binary_path,
             base_directory_path,
+            tracer,
         })
     }
 
@@ -87,6 +96,7 @@ impl BlenderJobRunner {
         info!("Starting to render frame {}.", frame_index);
 
         let time_render_start = Instant::now();
+        let systime_render_start = SystemTime::now();
 
         let blender_args = [
             &blender_file_path_str,
@@ -108,6 +118,7 @@ impl BlenderJobRunner {
             .into_diagnostic()
             .wrap_err_with(|| miette!("Failed while executing Blender binary."))?;
 
+        let systime_render_end = SystemTime::now();
         let render_duration = time_render_start.elapsed();
 
         info!(
@@ -115,6 +126,14 @@ impl BlenderJobRunner {
             frame_index,
             render_duration.as_secs_f64()
         );
+
+        self.tracer
+            .trace_new_rendered_frame(
+                frame_index,
+                systime_render_start,
+                systime_render_end,
+            )
+            .await;
 
         Ok(())
     }

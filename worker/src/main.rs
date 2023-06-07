@@ -6,6 +6,7 @@ mod utilities;
 use clap::Parser;
 use log::info;
 use miette::{miette, Context, IntoDiagnostic, Result};
+use shared::results::worker_trace::WorkerTraceBuilder;
 use url::Url;
 
 use crate::cli::CLIArgs;
@@ -33,11 +34,16 @@ async fn main() -> Result<()> {
     let base_directory_path = parse_with_tilde_support(&args.base_directory_path)
         .wrap_err_with(|| miette!("Could not parse base directory path with tilde support."))?;
 
-    let runner = BlenderJobRunner::new(blender_binary_path, base_directory_path)?;
+    let tracer = WorkerTraceBuilder::new_empty();
+    let runner = BlenderJobRunner::new(
+        blender_binary_path,
+        base_directory_path,
+        tracer.clone(),
+    )?;
 
     info!("Running worker until job is complete.");
 
-    Worker::connect_and_run_to_job_completion(master_server_address, runner)
+    Worker::connect_and_run_to_job_completion(master_server_address, runner, tracer)
         .await
         .wrap_err_with(|| miette!("Errored while running worker"))?;
 

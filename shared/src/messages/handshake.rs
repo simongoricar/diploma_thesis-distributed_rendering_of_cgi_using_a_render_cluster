@@ -6,7 +6,7 @@ use crate::messages::WebSocketMessage;
 
 pub static MASTER_HANDSHAKE_REQUEST_TYPE_NAME: &str = "handshake_request";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MasterHandshakeRequest {
     pub server_version: String,
 }
@@ -82,7 +82,7 @@ impl TryFrom<WebSocketMessage> for WorkerHandshakeResponse {
 
 pub static MASTER_HANDSHAKE_ACK_TYPE_NAME: &str = "handshake_acknowledgement";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MasterHandshakeAcknowledgement {
     pub ok: bool,
 }

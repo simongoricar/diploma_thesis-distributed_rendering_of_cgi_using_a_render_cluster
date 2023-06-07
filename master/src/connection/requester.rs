@@ -9,10 +9,10 @@ use shared::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
 };
+use shared::messages::SenderHandle;
 use shared::results::worker_trace::WorkerTrace;
 
 use crate::connection::receiver::WorkerReceiver;
-use crate::connection::sender::SenderHandle;
 
 pub struct WorkerRequester {
     sender_handle: SenderHandle,

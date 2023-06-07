@@ -14,7 +14,7 @@ impl CancellationToken {
         }
     }
 
-    pub fn cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.token.load(Ordering::SeqCst)
     }
 

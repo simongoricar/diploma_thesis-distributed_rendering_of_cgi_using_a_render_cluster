@@ -17,6 +17,7 @@ use shared::logger::Logger;
 use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshakeRequest};
 use shared::messages::heartbeat::MasterHeartbeatRequest;
 use shared::messages::queue::{FrameQueueAddResult, WorkerFrameQueueItemFinishedEvent};
+use shared::messages::SenderHandle;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -26,7 +27,7 @@ use crate::cluster::state::ClusterManagerState;
 use crate::connection::queue::{FrameOnWorker, WorkerQueue};
 use crate::connection::receiver::WorkerReceiver;
 use crate::connection::requester::WorkerRequester;
-use crate::connection::sender::{SenderHandle, WorkerSender};
+use crate::connection::sender::WorkerSender;
 
 /// State of the WebSocket connection with the worker.
 pub enum WorkerConnectionState {
@@ -313,7 +314,7 @@ impl Worker {
                     ).await?;
                 },
                 _ = tokio::time::sleep(Duration::from_secs(2)) => {
-                    if cluster_cancellation_token.cancelled() {
+                    if cluster_cancellation_token.is_cancelled() {
                         logger.trace("Stopping incoming messages manager (cluster stopping).");
                         break;
                     }
@@ -343,11 +344,11 @@ impl Worker {
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
 
-            if heartbeat_cancellation_token.cancelled() {
+            if heartbeat_cancellation_token.is_cancelled() {
                 logger.trace("Stopping heartbeat task (heartbeat cancelled).");
                 break;
             }
-            if cluster_cancellation_token.cancelled() {
+            if cluster_cancellation_token.is_cancelled() {
                 logger.trace("Stopping heartbeat task (cluster stopping).");
                 break;
             }

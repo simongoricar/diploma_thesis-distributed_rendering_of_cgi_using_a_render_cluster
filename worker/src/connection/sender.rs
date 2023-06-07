@@ -4,33 +4,30 @@ use std::time::Duration;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
-use log::trace;
+use log::{debug, trace};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
-use shared::logger::Logger;
 use shared::messages::{OutgoingMessage, SenderHandle};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-pub struct WorkerSender {
+pub struct MasterSender {
     sender_channel: Arc<UnboundedSender<OutgoingMessage>>,
 
     pub task_join_handle: JoinHandle<Result<()>>,
 }
 
-impl WorkerSender {
+impl MasterSender {
     pub fn new(
-        websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
+        websocket_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
         global_cancellation_token: CancellationToken,
-        logger: Arc<Logger>,
     ) -> Self {
         let (message_send_queue_tx, message_send_queue_rx) =
             futures_channel::mpsc::unbounded::<OutgoingMessage>();
 
         let join_handle = tokio::spawn(Self::run(
-            logger,
             websocket_sink,
             message_send_queue_rx,
             global_cancellation_token,
@@ -55,14 +52,11 @@ impl WorkerSender {
      */
 
     async fn run(
-        logger: Arc<Logger>,
-        mut websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
+        mut websocket_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
         mut message_send_queue_receiver: UnboundedReceiver<OutgoingMessage>,
         global_cancellation_token: CancellationToken,
     ) -> Result<()> {
-        logger.debug(
-            "Running task loop: forwarding messages from channel through WebSocket connection.",
-        );
+        debug!("Running task loop: forwarding incoming messages through WebSocket connection.");
 
         loop {
             let potential_message = tokio::time::timeout(
@@ -72,13 +66,13 @@ impl WorkerSender {
             .await;
 
             if global_cancellation_token.is_cancelled() {
-                logger.trace("Stopping outgoing messages sender (cluster stopping).");
+                trace!("Stopping outgoing messages sender (worker stopping).");
                 break;
             }
 
             if let Ok(outgoing_message) = potential_message {
                 let outgoing_message = outgoing_message
-                    .ok_or_else(|| miette!("Can't get outgoing message from channel!"))?;
+                    .ok_or_else(|| miette!("Can't get outgoing message from queue channel!"))?;
 
                 trace!(
                     "Sending message: id={}",

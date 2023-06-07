@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use log::debug;
 use miette::{miette, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -73,12 +72,6 @@ impl WorkerTraceBuilder {
     pub async fn build(&self) -> Result<WorkerTrace> {
         let trace = self.0.lock().await;
 
-        // DEBUGONLY
-        debug!("Trace locked, building!");
-        debug!("Job start time is {:?}", trace.job_start_time);
-        debug!("Job finish time is {:?}", trace.job_finish_time);
-
-        // FIXME Why the hell does this block?!?!?! Wait, does it error?
         let result = Ok(WorkerTrace {
             total_queued_frames: trace.total_queued_frames,
             total_queued_frames_removed_from_queue: trace.total_queued_frames_removed_from_queue,
@@ -88,12 +81,8 @@ impl WorkerTraceBuilder {
             job_finish_time: trace
                 .job_finish_time
                 .ok_or_else(|| miette!("Missing job finish time, can't build."))?,
-            frame_render_times: Vec::new(),
-            // frame_render_times: trace.frame_render_times.clone(),
+            frame_render_times: trace.frame_render_times.clone(),
         });
-
-        // DEBUGONLY
-        debug!("Returning trace!");
 
         result
     }

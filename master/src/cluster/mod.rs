@@ -8,8 +8,10 @@ use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
 use shared::messages::job::MasterJobStartedEvent;
+use shared::results::performance::MasterPerformance;
 use shared::results::worker_trace::WorkerTrace;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::Instant;
 
 use crate::cluster::state::ClusterManagerState;
 use crate::connection::Worker;
@@ -42,7 +44,9 @@ impl ClusterManager {
         })
     }
 
-    pub async fn run_job_to_completion(self) -> Result<Vec<(SocketAddr, WorkerTrace)>> {
+    pub async fn run_job_to_completion(
+        self,
+    ) -> Result<(MasterPerformance, Vec<(SocketAddr, WorkerTrace)>)> {
         // Keep accepting connections as long as possible.
         let worker_connection_handler = Self::indefinitely_accept_connections(
             self.server_socket,
@@ -54,7 +58,7 @@ impl ClusterManager {
             Self::wait_for_readiness_and_complete_job(self.job, self.state.clone());
 
         let connection_acceptor_handle = tokio::spawn(worker_connection_handler);
-        job_processing_loop.await?;
+        let master_performance = job_processing_loop.await?;
 
         info!("Requesting performance traces from all workers...");
         let mut worker_traces: Vec<(SocketAddr, WorkerTrace)> = Vec::new();
@@ -86,7 +90,7 @@ impl ClusterManager {
         trace!("Waiting for connection acceptor to join worker connections and stop.");
         connection_acceptor_handle.await.into_diagnostic()??;
 
-        Ok(worker_traces)
+        Ok((master_performance, worker_traces))
     }
 
     async fn indefinitely_accept_connections(
@@ -163,7 +167,7 @@ impl ClusterManager {
     async fn wait_for_readiness_and_complete_job(
         job: BlenderJob,
         state: Arc<ClusterManagerState>,
-    ) -> Result<()> {
+    ) -> Result<MasterPerformance> {
         info!(
             "Waiting for at least {} workers to connect before starting job.",
             job.wait_for_number_of_workers
@@ -187,8 +191,9 @@ impl ClusterManager {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
-
         // Send job starting event to all clients
+        let time_job_start = Instant::now();
+
         {
             let workers_locked = &state.workers.lock().await;
 
@@ -261,6 +266,10 @@ impl ClusterManager {
         }
 
         info!("All frames have been finished!");
-        Ok(())
+
+        let total_job_duration = time_job_start.elapsed();
+        let performance = MasterPerformance::new(total_job_duration);
+
+        Ok(performance)
     }
 }

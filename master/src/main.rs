@@ -3,6 +3,7 @@ pub mod cluster;
 pub mod connection;
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use clap::Parser;
 use log::info;
@@ -31,13 +32,13 @@ async fn main() -> Result<()> {
             .wrap_err_with(|| miette!("Could not initialize cluster manager."))?;
 
         info!("Running server to job completion.");
-        let traces = manager
+        let (master_performance, worker_traces) = manager
             .run_job_to_completion()
             .await
             .wrap_err_with(|| miette!("Could not run server and job to completion."))?;
         info!("-- JOB COMPLETE, ANALYZING TRACES --");
 
-        let performance_traces = traces
+        let worker_performance_traces = worker_traces
             .into_iter()
             .map(|(address, trace)| {
                 let performance = WorkerPerformance::from_worker_trace(&trace);
@@ -49,38 +50,83 @@ async fn main() -> Result<()> {
             })
             .collect::<Result<Vec<(SocketAddr, WorkerPerformance)>>>()?;
 
+
         println!("Worker performance results:");
         println!();
 
-        for (address, performance) in performance_traces {
+        let mut cumulative_rendering_time = Duration::new(0, 0);
+        let mut cumulative_idle_time = Duration::new(0, 0);
+
+        let mut cumulative_frames_queued: usize = 0;
+        let mut cumulative_frames_rendered: usize = 0;
+        let mut cumulative_frames_stolen: usize = 0;
+
+        for (address, performance) in worker_performance_traces {
+            cumulative_rendering_time += performance.total_rendering_time;
+            cumulative_idle_time += performance.total_idle_time;
+
+            cumulative_frames_queued += performance.total_frames_queued;
+            cumulative_frames_rendered += performance.total_frames_rendered;
+            cumulative_frames_stolen += performance.total_frames_stolen_from_queue;
+
+
             println!("[Worker {}:{}]", address.ip(), address.port());
 
             println!(
-                "Total active time = {:.6} seconds.",
+                "Worker on-job time = {:.6} seconds.",
                 performance.total_time.as_secs_f64()
             );
             println!(
-                "Total rendering time = {:.6} seconds.",
+                "Worker rendering time = {:.6} seconds.",
                 performance.total_rendering_time.as_secs_f64()
             );
             println!(
-                "Total idle time = {:.6} seconds.",
+                "Worker idle time = {:.6} seconds.",
                 performance.total_idle_time.as_secs_f64()
             );
 
             println!(
-                "Total frames queued = {}",
+                "Worker queued frames = {}",
                 performance.total_frames_queued
             );
             println!(
-                "Total frames rendered = {}",
+                "Worker frames rendered = {}",
                 performance.total_frames_rendered
             );
             println!(
-                "Total frames stolen from queue before rendered = {}",
+                "Worker frames stolen from its queue before rendered = {}",
                 performance.total_frames_stolen_from_queue
             );
+
+            println!();
         }
+
+
+        println!("[Total]");
+
+        // TODO Total on-job time?
+
+        println!(
+            "Cumulative rendering time = {:.6} seconds.",
+            cumulative_rendering_time.as_secs_f64()
+        );
+        println!(
+            "Cumulative idle time = {:.6} seconds.",
+            cumulative_idle_time.as_secs_f64()
+        );
+
+        println!(
+            "Cumulative queued frames = {}",
+            cumulative_frames_queued
+        );
+        println!(
+            "Cumulative frames rendered = {}",
+            cumulative_frames_rendered
+        );
+        println!(
+            "Cumulative frames stolen from workers' queues before rendered = {}",
+            cumulative_frames_stolen
+        );
     }
 
     Ok(())

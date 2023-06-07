@@ -6,6 +6,18 @@ use serde::{Deserialize, Serialize};
 use crate::results::worker_trace::WorkerTrace;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct MasterPerformance {
+    pub total_time: Duration,
+}
+
+impl MasterPerformance {
+    pub fn new(total_time: Duration) -> Self {
+        Self { total_time }
+    }
+}
+
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct WorkerPerformance {
     pub total_frames_rendered: usize,
 

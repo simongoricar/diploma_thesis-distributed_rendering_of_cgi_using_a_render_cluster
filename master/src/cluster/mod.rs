@@ -7,8 +7,7 @@ use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
-use shared::messages::job::MasterJobFinishedEvent;
-use shared::messages::traits::IntoWebSocketMessage;
+use shared::results::worker_trace::WorkerTrace;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::cluster::state::ClusterManagerState;
@@ -42,7 +41,7 @@ impl ClusterManager {
         })
     }
 
-    pub async fn run_job_to_completion(self) -> Result<()> {
+    pub async fn run_job_to_completion(self) -> Result<Vec<(SocketAddr, WorkerTrace)>> {
         // Keep accepting connections as long as possible.
         let worker_connection_handler = Self::indefinitely_accept_connections(
             self.server_socket,
@@ -56,28 +55,30 @@ impl ClusterManager {
         let connection_acceptor_handle = tokio::spawn(worker_connection_handler);
         job_processing_loop.await?;
 
-        trace!("Sending job finished events to all workers.");
+        info!("Requesting performance traces from all workers...");
+        let mut worker_traces: Vec<(SocketAddr, WorkerTrace)> = Vec::new();
         {
             let locked_workers = self.state.workers.lock().await;
+
             for worker in locked_workers.values() {
-                MasterJobFinishedEvent::new()
-                    .into_ws_message()
-                    .send(&worker.sender_channel)
-                    .wrap_err_with(|| miette!("Could not send job finished event to worker."))?;
+                let worker_trace = worker.requester.finish_job().await.wrap_err_with(|| {
+                    miette!(
+                        "Could not receive trace from worker {:?}!",
+                        worker.address
+                    )
+                })?;
+
+                worker_traces.push((worker.address, worker_trace));
             }
         }
 
-        // This should give us enough time to send out all the job finished events.
-        // Otherwise we'd have to add additional complexity.
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        trace!("Setting cancellation token to true.");
+        trace!("Cancelling tasks..");
         self.cancellation_token.cancel();
 
         trace!("Waiting for connection acceptor to join worker connections and stop.");
         connection_acceptor_handle.await.into_diagnostic()??;
 
-        Ok(())
+        Ok(worker_traces)
     }
 
     async fn indefinitely_accept_connections(

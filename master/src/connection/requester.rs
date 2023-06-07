@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures_channel::mpsc::UnboundedSender;
 use miette::{miette, Context, Result};
 use shared::jobs::BlenderJob;
+use shared::messages::job::MasterJobFinishedRequest;
 use shared::messages::queue::{
     FrameQueueAddResult,
     FrameQueueRemoveResult,
@@ -10,6 +11,7 @@ use shared::messages::queue::{
     MasterFrameQueueRemoveRequest,
 };
 use shared::messages::traits::IntoWebSocketMessage;
+use shared::results::worker_trace::WorkerTrace;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::connection::event_dispatcher::WorkerEventDispatcher;
@@ -86,5 +88,27 @@ impl WorkerRequester {
             .wrap_err_with(|| miette!("Could not receive frame queue remove response."))?;
 
         Ok(response.result)
+    }
+
+    pub async fn finish_job(&self) -> Result<WorkerTrace> {
+        let request = MasterJobFinishedRequest::new();
+        let request_id = request.message_request_id;
+
+        request
+            .into_ws_message()
+            .send(&self.sender_channel)
+            .wrap_err_with(|| miette!("Could not send job finished request."))?;
+
+        let response = self
+            .event_dispatcher
+            .wait_for_message_with_predicate(
+                self.event_dispatcher.job_finished_response_receiver(),
+                None,
+                |response| response.message_request_context_id == request_id,
+            )
+            .await
+            .wrap_err_with(|| miette!("Could not receive job finished response."))?;
+
+        Ok(response.trace)
     }
 }

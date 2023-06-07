@@ -7,25 +7,33 @@ use log::{info, trace, warn};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::heartbeat::MasterHeartbeatRequest;
-use shared::messages::job::MasterJobFinishedEvent;
+use shared::messages::job::{MasterJobFinishedRequest, MasterJobStartedEvent};
 use shared::messages::queue::{MasterFrameQueueAddRequest, MasterFrameQueueRemoveRequest};
 use shared::messages::WebSocketMessage;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-/// Manages all incoming WebSocket messages from the master server.
-pub struct MasterEventDispatcher {
+#[derive(Clone)]
+pub struct EventSenders {
     /// Receives heartbeat requests.
-    heartbeat_request_sender: Arc<broadcast::Sender<MasterHeartbeatRequest>>,
+    heartbeat_request: Arc<broadcast::Sender<MasterHeartbeatRequest>>,
 
     /// Receives frame queue item adding requests.
-    queue_frame_add_request_sender: Arc<broadcast::Sender<MasterFrameQueueAddRequest>>,
+    queue_frame_add_request: Arc<broadcast::Sender<MasterFrameQueueAddRequest>>,
 
     /// Receives frame queue item removal requests.
-    queue_frame_remove_request_sender: Arc<broadcast::Sender<MasterFrameQueueRemoveRequest>>,
+    queue_frame_remove_request: Arc<broadcast::Sender<MasterFrameQueueRemoveRequest>>,
 
-    /// Receives job finished events.
-    job_finished_event_sender: Arc<broadcast::Sender<MasterJobFinishedEvent>>,
+    job_started_event: Arc<broadcast::Sender<MasterJobStartedEvent>>,
+
+    /// Receives job finishing requests.
+    job_finished_request: Arc<broadcast::Sender<MasterJobFinishedRequest>>,
+}
+
+
+/// Manages all incoming WebSocket messages from the master server.
+pub struct MasterEventDispatcher {
+    senders: EventSenders,
 
     task_join_handle: JoinHandle<()>,
 }
@@ -41,27 +49,31 @@ impl MasterEventDispatcher {
         let (queue_frame_add_request_tx, _) = broadcast::channel::<MasterFrameQueueAddRequest>(512);
         let (queue_frame_remove_request_tx, _) =
             broadcast::channel::<MasterFrameQueueRemoveRequest>(512);
-        let (job_finished_event_tx, _) = broadcast::channel::<MasterJobFinishedEvent>(512);
+        let (job_started_event_tx, _) = broadcast::channel::<MasterJobStartedEvent>(512);
+        let (job_finished_request_tx, _) = broadcast::channel::<MasterJobFinishedRequest>(512);
 
         let heartbeat_request_tx_arc = Arc::new(heartbeat_request_tx);
         let queue_frame_add_request_tx_arc = Arc::new(queue_frame_add_request_tx);
         let queue_frame_remove_request_tx_arc = Arc::new(queue_frame_remove_request_tx);
-        let job_finished_event_tx_arc = Arc::new(job_finished_event_tx);
+        let job_started_event_tx_arc = Arc::new(job_started_event_tx);
+        let job_finished_request_tx_arc = Arc::new(job_finished_request_tx);
+
+        let senders = EventSenders {
+            heartbeat_request: heartbeat_request_tx_arc,
+            queue_frame_add_request: queue_frame_add_request_tx_arc,
+            queue_frame_remove_request: queue_frame_remove_request_tx_arc,
+            job_started_event: job_started_event_tx_arc,
+            job_finished_request: job_finished_request_tx_arc,
+        };
 
         let task_join_handle = tokio::spawn(Self::run(
-            heartbeat_request_tx_arc.clone(),
-            queue_frame_add_request_tx_arc.clone(),
-            queue_frame_remove_request_tx_arc.clone(),
-            job_finished_event_tx_arc.clone(),
+            senders.clone(),
             receiver_channel,
             cancellation_token,
         ));
 
         Self {
-            heartbeat_request_sender: heartbeat_request_tx_arc,
-            queue_frame_add_request_sender: queue_frame_add_request_tx_arc,
-            queue_frame_remove_request_sender: queue_frame_remove_request_tx_arc,
-            job_finished_event_sender: job_finished_event_tx_arc,
+            senders,
             task_join_handle,
         }
     }
@@ -73,12 +85,7 @@ impl MasterEventDispatcher {
     /// Run the event dispatcher indefinitely, reading the incoming WebSocket messages
     /// and broadcasting the to subscribed `tokio::broadcast::Receiver`s.
     async fn run(
-        heartbeat_request_event_sender: Arc<broadcast::Sender<MasterHeartbeatRequest>>,
-        queue_frame_add_request_event_sender: Arc<broadcast::Sender<MasterFrameQueueAddRequest>>,
-        queue_frame_remove_request_event_sender: Arc<
-            broadcast::Sender<MasterFrameQueueRemoveRequest>,
-        >,
-        job_finished_event_sender: Arc<broadcast::Sender<MasterJobFinishedEvent>>,
+        senders: EventSenders,
         mut websocket_receiver_channel: UnboundedReceiver<WebSocketMessage>,
         cancellation_token: CancellationToken,
     ) {
@@ -112,16 +119,19 @@ impl MasterEventDispatcher {
             // (as it really isn't an error, it's just that no-one will see that message as no-one is subscribed).
             match next_message {
                 WebSocketMessage::MasterHeartbeatRequest(request) => {
-                    let _ = heartbeat_request_event_sender.send(request);
+                    let _ = senders.heartbeat_request.send(request);
                 }
                 WebSocketMessage::MasterFrameQueueAddRequest(request) => {
-                    let _ = queue_frame_add_request_event_sender.send(request);
+                    let _ = senders.queue_frame_add_request.send(request);
                 }
                 WebSocketMessage::MasterFrameQueueRemoveRequest(request) => {
-                    let _ = queue_frame_remove_request_event_sender.send(request);
+                    let _ = senders.queue_frame_remove_request.send(request);
                 }
-                WebSocketMessage::MasterJobFinishedEvent(event) => {
-                    let _ = job_finished_event_sender.send(event);
+                WebSocketMessage::MasterJobStartedEvent(event) => {
+                    let _ = senders.job_started_event.send(event);
+                }
+                WebSocketMessage::MasterJobFinishedRequest(request) => {
+                    let _ = senders.job_finished_request.send(request);
                 }
                 _ => {
                     warn!("MasterEventDispatcher: Unexpected (but valid) incoming WebSocket message: {}", next_message.type_name());
@@ -136,25 +146,29 @@ impl MasterEventDispatcher {
 
     /// Get a `Receiver` for future heartbeat requests from the master server.
     pub fn heartbeat_request_receiver(&self) -> broadcast::Receiver<MasterHeartbeatRequest> {
-        self.heartbeat_request_sender.subscribe()
+        self.senders.heartbeat_request.subscribe()
     }
 
     /// Get a `Receiver` for future "queue item add" requests from the master server.
     pub fn frame_queue_add_request_receiver(
         &self,
     ) -> broadcast::Receiver<MasterFrameQueueAddRequest> {
-        self.queue_frame_add_request_sender.subscribe()
+        self.senders.queue_frame_add_request.subscribe()
     }
 
     /// Get a `Receiver` for future "queue item remove" requests from the master server.
     pub fn frame_queue_remove_request_receiver(
         &self,
     ) -> broadcast::Receiver<MasterFrameQueueRemoveRequest> {
-        self.queue_frame_remove_request_sender.subscribe()
+        self.senders.queue_frame_remove_request.subscribe()
     }
 
-    pub fn job_finished_event_receiver(&self) -> broadcast::Receiver<MasterJobFinishedEvent> {
-        self.job_finished_event_sender.subscribe()
+    pub fn job_started_event_receiver(&self) -> broadcast::Receiver<MasterJobStartedEvent> {
+        self.senders.job_started_event.subscribe()
+    }
+
+    pub fn job_finished_request_receiver(&self) -> broadcast::Receiver<MasterJobFinishedRequest> {
+        self.senders.job_finished_request.subscribe()
     }
 
     /*

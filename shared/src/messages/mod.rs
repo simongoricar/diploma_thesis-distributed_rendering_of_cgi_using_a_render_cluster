@@ -10,7 +10,11 @@ use crate::messages::handshake::{
     WorkerHandshakeResponse,
 };
 use crate::messages::heartbeat::{MasterHeartbeatRequest, WorkerHeartbeatResponse};
-use crate::messages::job::MasterJobFinishedEvent;
+use crate::messages::job::{
+    MasterJobFinishedRequest,
+    MasterJobStartedEvent,
+    WorkerJobFinishedResponse,
+};
 use crate::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
@@ -102,8 +106,17 @@ pub enum WebSocketMessage {
     #[serde(rename = "response_heartbeat")]
     WorkerHeartbeatResponse(WorkerHeartbeatResponse),
 
-    #[serde(rename = "event_job-finished")]
-    MasterJobFinishedEvent(MasterJobFinishedEvent),
+    /*
+     * Job-related events and requests
+     */
+    #[serde(rename = "event_job-started")]
+    MasterJobStartedEvent(MasterJobStartedEvent),
+
+    #[serde(rename = "request_job-finished")]
+    MasterJobFinishedRequest(MasterJobFinishedRequest),
+
+    #[serde(rename = "response_job-finished")]
+    WorkerJobFinishedResponse(WorkerJobFinishedResponse),
 }
 
 impl WebSocketMessage {
@@ -169,7 +182,9 @@ impl WebSocketMessage {
             }
             WebSocketMessage::MasterHeartbeatRequest(_) => MasterHeartbeatRequest::type_name(),
             WebSocketMessage::WorkerHeartbeatResponse(_) => WorkerHeartbeatResponse::type_name(),
-            WebSocketMessage::MasterJobFinishedEvent(_) => MasterJobFinishedEvent::type_name(),
+            WebSocketMessage::MasterJobStartedEvent(_) => MasterJobStartedEvent::type_name(),
+            WebSocketMessage::MasterJobFinishedRequest(_) => MasterJobFinishedRequest::type_name(),
+            WebSocketMessage::WorkerJobFinishedResponse(_) => WorkerJobFinishedResponse::type_name(),
         }
     }
 }

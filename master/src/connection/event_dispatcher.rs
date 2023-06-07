@@ -8,6 +8,7 @@ use miette::{miette, IntoDiagnostic};
 use miette::{Context, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::heartbeat::WorkerHeartbeatResponse;
+use shared::messages::job::WorkerJobFinishedResponse;
 use shared::messages::queue::{
     WorkerFrameQueueAddResponse,
     WorkerFrameQueueItemFinishedEvent,
@@ -33,6 +34,8 @@ struct EventSenders {
 
     // Receives worker's queue item finished events.
     queue_item_finished_event: Arc<Sender<WorkerFrameQueueItemFinishedEvent>>,
+
+    job_finished_response: Arc<Sender<WorkerJobFinishedResponse>>,
 }
 
 /// Manages all incoming WebSocket messages for a worker.
@@ -57,12 +60,14 @@ impl WorkerEventDispatcher {
             broadcast::channel::<WorkerFrameQueueItemRenderingEvent>(512);
         let (queue_item_finished_tx, _) =
             broadcast::channel::<WorkerFrameQueueItemFinishedEvent>(512);
+        let (job_finished_response_tx, _) = broadcast::channel::<WorkerJobFinishedResponse>(512);
 
         let heartbeat_tx_arc = Arc::new(heartbeat_tx);
         let queue_item_add_tx_arc = Arc::new(queue_item_add_tx);
         let queue_item_remove_tx_arc = Arc::new(queue_item_remove_tx);
         let queue_item_rendering_tx_arc = Arc::new(queue_item_rendering_tx);
         let queue_item_finished_tx_arc = Arc::new(queue_item_finished_tx);
+        let job_finished_response_tx_arc = Arc::new(job_finished_response_tx);
 
         let senders = EventSenders {
             heartbeat_response: heartbeat_tx_arc,
@@ -70,6 +75,7 @@ impl WorkerEventDispatcher {
             queue_item_remove_response: queue_item_remove_tx_arc,
             queue_item_rendering_event: queue_item_rendering_tx_arc,
             queue_item_finished_event: queue_item_finished_tx_arc,
+            job_finished_response: job_finished_response_tx_arc,
         };
 
         let dispatcher_join_handle = tokio::spawn(Self::run(
@@ -145,6 +151,9 @@ impl WorkerEventDispatcher {
                 WebSocketMessage::WorkerHeartbeatResponse(response) => {
                     let _ = senders.heartbeat_response.send(response);
                 }
+                WebSocketMessage::WorkerJobFinishedResponse(response) => {
+                    let _ = senders.job_finished_response.send(response);
+                }
                 _ => {
                     warn!(
                         "WorkerEventDispatcher: Unexpected (but valid) incoming WebSocket message: {}",
@@ -188,6 +197,11 @@ impl WorkerEventDispatcher {
     /// Get a `Receiver` for future "heartbeat response" worker messages.
     pub fn heartbeat_response_receiver(&self) -> Receiver<WorkerHeartbeatResponse> {
         self.senders.heartbeat_response.subscribe()
+    }
+
+    /// Get a `Receiver` for future "job finished response" worker messages.
+    pub fn job_finished_response_receiver(&self) -> Receiver<WorkerJobFinishedResponse> {
+        self.senders.job_finished_response.subscribe()
     }
 
     /*

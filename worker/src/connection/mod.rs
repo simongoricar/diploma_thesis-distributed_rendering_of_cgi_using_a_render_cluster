@@ -1,7 +1,7 @@
 pub mod event_dispatcher;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::stream::{SplitSink, SplitStream};
@@ -15,7 +15,11 @@ use shared::messages::handshake::{
     WorkerHandshakeResponse,
 };
 use shared::messages::heartbeat::WorkerHeartbeatResponse;
-use shared::messages::job::MasterJobFinishedEvent;
+use shared::messages::job::{
+    MasterJobFinishedRequest,
+    MasterJobStartedEvent,
+    WorkerJobFinishedResponse,
+};
 use shared::messages::queue::{
     MasterFrameQueueAddRequest,
     MasterFrameQueueRemoveRequest,
@@ -24,6 +28,7 @@ use shared::messages::queue::{
 };
 use shared::messages::traits::IntoWebSocketMessage;
 use shared::messages::{parse_websocket_message, receive_exact_message, WebSocketMessage};
+use shared::results::worker_trace::WorkerTraceBuilder;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -79,6 +84,7 @@ impl Worker {
     /// (but only one frame at a time).
     pub async fn run_to_job_completion(self, blender_runner: BlenderJobRunner) -> Result<()> {
         let cancellation_token = CancellationToken::new();
+        let trace_builder = WorkerTraceBuilder::new_empty();
 
         let sender_channel = Arc::new(self.sender_tx);
         let receiver_channel = Arc::new(Mutex::new(self.receiver_rx));
@@ -136,6 +142,7 @@ impl Worker {
             blender_runner,
             event_dispatcher_arc.clone(),
             sender_channel.clone(),
+            trace_builder,
             cancellation_token.clone(),
         ));
 
@@ -334,6 +341,7 @@ impl Worker {
         blender_runner: BlenderJobRunner,
         event_dispatcher: Arc<MasterEventDispatcher>,
         sender_channel: Arc<UnboundedSender<Message>>,
+        tracer: WorkerTraceBuilder,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         debug!("Running task loop: handling incoming messages.");
@@ -344,7 +352,8 @@ impl Worker {
         let mut queue_add_request_receiver = event_dispatcher.frame_queue_add_request_receiver();
         let mut queue_remove_request_receiver =
             event_dispatcher.frame_queue_remove_request_receiver();
-        let mut job_finished_receiver = event_dispatcher.job_finished_event_receiver();
+        let mut job_started_event_receiver = event_dispatcher.job_started_event_receiver();
+        let mut job_finished_request_receiver = event_dispatcher.job_finished_request_receiver();
 
         loop {
             tokio::select! {
@@ -360,6 +369,8 @@ impl Worker {
                         queue_add_request.job,
                         queue_add_request.frame_index
                     ).await;
+
+                    tracer.trace_new_frame_queued().await;
 
                     WorkerFrameQueueAddResponse::new_ok(queue_add_request.message_request_id)
                         .into_ws_message()
@@ -379,6 +390,8 @@ impl Worker {
                         queue_remove_request.frame_index
                     ).await;
 
+                    tracer.trace_frame_stolen_from_queue().await;
+
                     debug!("Frame removal result: {remove_result:?}, responding.");
 
                     WorkerFrameQueueRemoveResponse::new_with_result(
@@ -389,12 +402,36 @@ impl Worker {
                         .send(&sender_channel)
                         .wrap_err_with(|| miette!("Could not send frame queue removal response."))?;
                 },
-                job_finished_event = job_finished_receiver.recv() => {
-                    let _: MasterJobFinishedEvent = job_finished_event.into_diagnostic()?;
+                job_started_event = job_started_event_receiver.recv() => {
+                    let _: MasterJobStartedEvent = job_started_event.into_diagnostic()?;
 
-                    info!("Received job finished event.");
+                    info!("Master server signalled job start.");
+                    tracer.set_job_start_time(SystemTime::now()).await;
+                },
+                job_finished_request = job_finished_request_receiver.recv() => {
+                    let request: MasterJobFinishedRequest = job_finished_request.into_diagnostic()?;
+
+                    info!("Master server signalled job finish - sending trace and stopping.");
+                    tracer.set_job_finish_time(SystemTime::now()).await;
+
+                    let trace = tracer
+                        .build()
+                        .await
+                        .wrap_err_with(|| miette!("Could not build worker trace."))?;
+
+                    WorkerJobFinishedResponse::new(
+                        request.message_request_id,
+                        trace,
+                    )
+                        .into_ws_message()
+                        .send(&sender_channel)
+                        .wrap_err_with(|| miette!("Could not send job finished response."))?;
+
+                    // TODO Find a better way to wait for the final outgoing messages.
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+
+                    // Cancel the entire worker set of tasks.
                     cancellation_token.cancel();
-
                     trace!("Stopping incoming messages manager (worker stopping).");
                     break;
                 },

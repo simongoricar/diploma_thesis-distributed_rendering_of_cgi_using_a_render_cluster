@@ -29,6 +29,7 @@ impl WorkerFrameTrace {
     }
 }
 
+#[serde_as]
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct WorkerTrace {
     /// Amount of frames added to the worker's queue by the master server.
@@ -37,8 +38,10 @@ pub struct WorkerTrace {
     /// Amount of frames removed from worker's queue by the master server.
     pub total_queued_frames_removed_from_queue: usize,
 
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
     pub job_start_time: SystemTime,
 
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
     pub job_finish_time: SystemTime,
 
     /// Information about all rendered frames (in the order they were rendered).

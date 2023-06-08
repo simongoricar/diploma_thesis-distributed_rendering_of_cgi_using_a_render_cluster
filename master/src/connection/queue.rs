@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use miette::miette;
 use miette::Result;
 use shared::jobs::BlenderJob;
@@ -9,6 +12,7 @@ pub enum FrameStatusOnWorker {
 }
 
 /// Represents a single queue item on the worker.
+#[derive(Eq, PartialEq, Clone, Debug)]
 pub struct FrameOnWorker {
     pub job: BlenderJob,
 
@@ -35,13 +39,23 @@ impl FrameOnWorker {
 /// Can get out of sync with the actual worker, but unless something goes horribly wrong, not for long.
 pub struct WorkerQueue {
     queue: Vec<FrameOnWorker>,
+
+    atomic_queue_size: Arc<AtomicUsize>,
 }
 
 impl WorkerQueue {
     /// Initialize a new `WorkerQueue`.
     #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self { queue: Vec::new() }
+    pub fn new() -> (Self, Arc<AtomicUsize>) {
+        let queue_size = Arc::new(AtomicUsize::new(0));
+
+        (
+            Self {
+                queue: Vec::new(),
+                atomic_queue_size: queue_size.clone(),
+            },
+            queue_size,
+        )
     }
 
     /// Returns `true` if the worker queue is empty.
@@ -64,9 +78,14 @@ impl WorkerQueue {
             > 0
     }
 
+    pub fn last(&self) -> Option<FrameOnWorker> {
+        self.queue.last().map(|frame| frame.clone())
+    }
+
     /// Add a new frame to the worker's queue.
     pub fn add(&mut self, frame: FrameOnWorker) {
         self.queue.push(frame);
+        self.atomic_queue_size.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn set_frame_rendering(&mut self, job_name: String, frame_index: usize) -> Result<()> {
@@ -89,6 +108,7 @@ impl WorkerQueue {
             .ok_or_else(|| miette!("No such frame in queue."))?;
 
         self.queue.remove(item_index);
+        self.atomic_queue_size.fetch_sub(1, Ordering::SeqCst);
         Ok(())
     }
 }

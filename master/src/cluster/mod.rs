@@ -15,6 +15,7 @@ use tokio::time::Instant;
 
 use crate::cluster::state::ClusterManagerState;
 use crate::cluster::strategies::{
+    dynamic_distribution_strategy,
     naive_coarse_distribution_strategy,
     naive_fine_distribution_strategy,
 };
@@ -236,17 +237,35 @@ impl ClusterManager {
                         miette!("Failed to complete naive fine distribution strategy.")
                     })
             }
-            DistributionStrategy::NaiveCoarse { chunk_size } => {
+            DistributionStrategy::NaiveCoarse { target_queue_size } => {
                 info!(
-                    "Running job with strategy: naive coarse (chunk_size={})",
-                    chunk_size
+                    "Running job with strategy: naive coarse (target_queue_size={})",
+                    target_queue_size
                 );
 
-                naive_coarse_distribution_strategy(&job, state.clone(), chunk_size)
+                naive_coarse_distribution_strategy(&job, state.clone(), target_queue_size)
                     .await
                     .wrap_err_with(|| {
                         miette!("Failed to complete naive coarse distribution strategy.")
                     })
+            }
+            DistributionStrategy::Dynamic {
+                target_queue_size,
+                min_queue_size_to_steal,
+            } => {
+                info!(
+                    "Running job with strategy: dynamic (target_queue_size={})",
+                    target_queue_size
+                );
+
+                dynamic_distribution_strategy(
+                    &job,
+                    state.clone(),
+                    target_queue_size,
+                    min_queue_size_to_steal,
+                )
+                .await
+                .wrap_err_with(|| miette!("Failed to complete dynamic distribution strategy."))
             }
         };
 

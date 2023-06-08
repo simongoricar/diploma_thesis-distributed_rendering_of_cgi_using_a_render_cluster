@@ -5,6 +5,7 @@ pub mod sender;
 
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,6 +19,7 @@ use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshak
 use shared::messages::heartbeat::MasterHeartbeatRequest;
 use shared::messages::queue::{
     FrameQueueAddResult,
+    FrameQueueRemoveResult,
     WorkerFrameQueueItemFinishedEvent,
     WorkerFrameQueueItemRenderingEvent,
 };
@@ -66,6 +68,8 @@ pub struct Worker {
     /// Likely to be slightly off sync with the actual worker (as WebSockets introduce minimal latency).
     pub queue: Arc<Mutex<WorkerQueue>>,
 
+    pub queue_size: Arc<AtomicUsize>,
+
     /// `JoinSet` that contains all the async tasks this worker has running.
     pub connection_tasks: JoinSet<Result<()>>,
 
@@ -85,7 +89,8 @@ impl Worker {
         heartbeat_cancellation_token: CancellationToken,
         cluster_cancellation_token: CancellationToken,
     ) -> Result<Self> {
-        let queue = Arc::new(Mutex::new(WorkerQueue::new()));
+        let (queue, queue_size) = WorkerQueue::new();
+        let queue = Arc::new(Mutex::new(queue));
 
         let (logger, sender, receiver, requester, connection_tasks) =
             Self::accept_ws_stream_and_initialize_tasks(
@@ -106,6 +111,7 @@ impl Worker {
             receiver,
             requester,
             queue,
+            queue_size,
             connection_tasks,
             heartbeat_cancellation_token,
             cluster_cancellation_token,
@@ -156,6 +162,23 @@ impl Worker {
                 reason
             )),
         }
+    }
+
+    pub async fn unqueue_frame(
+        &self,
+        job_name: String,
+        frame_index: usize,
+    ) -> Result<FrameQueueRemoveResult> {
+        let remove_result = self
+            .requester
+            .frame_queue_remove_item(job_name.clone(), frame_index)
+            .await?;
+
+        if remove_result == FrameQueueRemoveResult::RemovedFromQueue {
+            self.queue.lock().await.remove(job_name, frame_index)?;
+        }
+
+        Ok(remove_result)
     }
 
     /*

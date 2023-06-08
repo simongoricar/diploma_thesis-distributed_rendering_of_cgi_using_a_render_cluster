@@ -165,7 +165,7 @@ impl TryFrom<WebSocketMessage> for MasterFrameQueueRemoveRequest {
 pub static WORKER_FRAME_QUEUE_REMOVE_RESPONSE_TYPE_NAME: &str = "response_frame-queue_remove";
 
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 #[serde(tag = "result")]
 pub enum FrameQueueRemoveResult {
     #[serde(rename = "removed-from-queue")]

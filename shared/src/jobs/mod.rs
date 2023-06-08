@@ -12,9 +12,13 @@ pub enum DistributionStrategy {
     NaiveFine,
 
     #[serde(rename = "naive-coarse")]
-    NaiveCoarse { chunk_size: usize },
-    // TODO
-    // Dynamic
+    NaiveCoarse { target_queue_size: usize },
+
+    #[serde(rename = "dynamic")]
+    Dynamic {
+        target_queue_size: usize,
+        min_queue_size_to_steal: usize,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]

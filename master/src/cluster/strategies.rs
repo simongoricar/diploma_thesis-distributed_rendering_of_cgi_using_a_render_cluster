@@ -172,12 +172,13 @@ fn select_best_frame_to_steal<'a>(
     {
         let since_queued = frame.queued_at.elapsed();
         if let Some(previous_worker_address) = frame.stolen_from.as_ref() {
-            if previous_worker_address == &worker_address
-                && since_queued.as_secs_f64()
+            if previous_worker_address == &worker_address {
+                if since_queued.as_secs_f64()
                     >= options.min_seconds_before_resteal_to_original_worker as f64
-            {
-                least_stolen_frame = Some(frame);
-                continue;
+                {
+                    least_stolen_frame = Some(frame);
+                    continue;
+                }
             }
         }
 

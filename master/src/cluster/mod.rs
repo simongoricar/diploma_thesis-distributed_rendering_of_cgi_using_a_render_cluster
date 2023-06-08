@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{debug, info, trace};
+use log::{info, trace};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
@@ -19,51 +19,42 @@ use crate::connection::Worker;
 pub mod state;
 
 
-pub struct ClusterManager {
-    server_socket: TcpListener,
-
-    state: Arc<ClusterManagerState>,
-
-    job: BlenderJob,
-
-    cancellation_token: CancellationToken,
-}
+pub struct ClusterManager {}
 
 impl ClusterManager {
-    pub async fn new_from_job(host: String, port: usize, job: BlenderJob) -> Result<Self> {
+    pub async fn initialize_server_and_run_job(
+        host: &str,
+        port: usize,
+        job: BlenderJob,
+    ) -> Result<(MasterPerformance, Vec<(SocketAddr, WorkerTrace)>)> {
+        let shared_state = Arc::new(ClusterManagerState::new_from_job(job.clone()));
+        let cancellation_token = CancellationToken::new();
+
         let server_socket = TcpListener::bind(format!("{host}:{port}"))
             .await
             .into_diagnostic()?;
-        let cancellation_token = CancellationToken::new();
 
-        Ok(Self {
+        // Initialize two futures: one that accepts incoming worker connections
+        // and another that waits for correct amount of workers and performs the job.
+        let worker_connection_acceptor_future = Self::indefinitely_accept_connections(
             server_socket,
-            state: Arc::new(ClusterManagerState::new_from_job(job.clone())),
-            job,
-            cancellation_token,
-        })
-    }
-
-    pub async fn run_job_to_completion(
-        self,
-    ) -> Result<(MasterPerformance, Vec<(SocketAddr, WorkerTrace)>)> {
-        // Keep accepting connections as long as possible.
-        let worker_connection_handler = Self::indefinitely_accept_connections(
-            self.server_socket,
-            self.state.clone(),
-            self.cancellation_token.clone(),
+            shared_state.clone(),
+            cancellation_token.clone(),
         );
 
-        let job_processing_loop =
-            Self::wait_for_readiness_and_complete_job(self.job, self.state.clone());
+        let job_processing_future =
+            Self::wait_for_readiness_and_complete_job(job, shared_state.clone());
 
-        let connection_acceptor_handle = tokio::spawn(worker_connection_handler);
-        let master_performance = job_processing_loop.await?;
+        // Spawn the acceptor in the background and wait for the job runner to complete first.
+        let worker_connection_acceptor_handle = tokio::spawn(worker_connection_acceptor_future);
+        let master_performance = job_processing_future.await?;
 
-        info!("Requesting performance traces from all workers...");
+        // Request performance traces from workers. Shortly after the workers respond with those,
+        // they will shut themselves down.
+        info!("Job finished, requesting performance traces from all workers...");
         let mut worker_traces: Vec<(SocketAddr, WorkerTrace)> = Vec::new();
         {
-            let locked_workers = self.state.workers.lock().await;
+            let locked_workers = shared_state.workers.lock().await;
 
             for worker in locked_workers.values() {
                 // Prevents the per-worker heartbeat task from sending any more messages through the WebSocket.
@@ -84,11 +75,13 @@ impl ClusterManager {
             }
         }
 
-        trace!("Cancelling tasks..");
-        self.cancellation_token.cancel();
+        trace!("Setting cancellation token...");
+        cancellation_token.cancel();
 
-        trace!("Waiting for connection acceptor to join worker connections and stop.");
-        connection_acceptor_handle.await.into_diagnostic()??;
+        trace!("Waiting for worker connection acceptor...");
+        worker_connection_acceptor_handle
+            .await
+            .into_diagnostic()??;
 
         Ok((master_performance, worker_traces))
     }
@@ -183,9 +176,10 @@ impl ClusterManager {
                 break;
             }
 
-            debug!(
-                "{}/{} clients connected - waiting before starting job.",
-                num_clients, job.wait_for_number_of_workers
+            trace!(
+                "{}/{} workers currently connected.",
+                num_clients,
+                job.wait_for_number_of_workers
             );
 
             tokio::time::sleep(Duration::from_secs(1)).await;

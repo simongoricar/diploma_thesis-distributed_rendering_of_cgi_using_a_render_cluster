@@ -260,22 +260,30 @@ async fn main() -> Result<()> {
     if let CLICommand::RunJob(run_job_args) = args.command {
         let start_time = Local::now();
 
-        info!("Loading job file.");
+        info!(
+            "Loading job file from {}.",
+            run_job_args.job_file_path
+        );
+
         let job = BlenderJob::load_from_file(run_job_args.job_file_path)
             .wrap_err_with(|| miette!("Could not load Blender job from file."))?;
 
-        info!("Initializing cluster manager.");
-        let manager =
-            ClusterManager::new_from_job(args.bind_to_host, args.bind_to_port, job.clone())
-                .await
-                .wrap_err_with(|| miette!("Could not initialize cluster manager."))?;
 
-        info!("Running server to job completion.");
-        let (master_performance, worker_traces) = manager
-            .run_job_to_completion()
-            .await
-            .wrap_err_with(|| miette!("Could not run server and job to completion."))?;
-        info!("-- JOB COMPLETE, ANALYZING TRACES --");
+        info!("Initializing server and running until job is complete.");
+
+        let (master_performance, worker_traces) = ClusterManager::initialize_server_and_run_job(
+            &args.bind_to_host,
+            args.bind_to_port,
+            job.clone(),
+        )
+        .await
+        .wrap_err_with(|| miette!("Failed to run master server to job completion."))?;
+
+        info!(
+            "Job has been completed and traces have been received, analyzing and saving to \"{}\".",
+            run_job_args.results_directory_path.to_string_lossy()
+        );
+
 
         // Parse and save the results.
         info!("Saving raw traces.");

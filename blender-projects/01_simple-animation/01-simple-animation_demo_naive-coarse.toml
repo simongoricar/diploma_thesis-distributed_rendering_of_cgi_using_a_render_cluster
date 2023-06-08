@@ -1,13 +1,13 @@
-job_name = "01_simple-animation_4f"
-job_description = "Simple animation (four frames)."
+job_name = "01_simple-animation_f20_nc3"
+job_description = "Simple animation (20 frames)."
 
 project_file_path = "%BASE%/blender-projects/01_simple-animation/01_simple-animation.blend"
 
 frame_range_from = 1
-frame_range_to = 2
+frame_range_to = 20
 
 wait_for_number_of_workers = 2
-frame_distribution_strategy = { strategy_type = "naive-fine" }
+frame_distribution_strategy = { strategy_type = "naive-coarse", target_queue_size = 3 }
 
 output_directory_path = "%BASE%/blender-projects/01_simple-animation/output"
 output_file_name_format = "#####"

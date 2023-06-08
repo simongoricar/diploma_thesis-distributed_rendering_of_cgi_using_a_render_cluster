@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{info, trace};
+use log::{error, info, trace};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
@@ -226,7 +226,7 @@ impl ClusterManager {
         /*
          * Run the Blender job to completion.
          */
-        match job.frame_distribution_strategy {
+        let distribution_result = match job.frame_distribution_strategy {
             DistributionStrategy::NaiveFine => {
                 info!("Running job with strategy: naive fine.");
 
@@ -234,7 +234,7 @@ impl ClusterManager {
                     .await
                     .wrap_err_with(|| {
                         miette!("Failed to complete naive fine distribution strategy.")
-                    })?;
+                    })
             }
             DistributionStrategy::NaiveCoarse { chunk_size } => {
                 info!(
@@ -246,9 +246,17 @@ impl ClusterManager {
                     .await
                     .wrap_err_with(|| {
                         miette!("Failed to complete naive coarse distribution strategy.")
-                    })?;
+                    })
             }
         };
+
+        if let Err(error) = distribution_result {
+            error!(
+                "Errored while running frame distribution: {}",
+                error
+            );
+            return Err(error);
+        }
 
         info!("All frames have been finished!");
 

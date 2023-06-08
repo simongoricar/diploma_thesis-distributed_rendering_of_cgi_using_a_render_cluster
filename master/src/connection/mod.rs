@@ -16,7 +16,11 @@ use shared::jobs::BlenderJob;
 use shared::logger::Logger;
 use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshakeRequest};
 use shared::messages::heartbeat::MasterHeartbeatRequest;
-use shared::messages::queue::{FrameQueueAddResult, WorkerFrameQueueItemFinishedEvent};
+use shared::messages::queue::{
+    FrameQueueAddResult,
+    WorkerFrameQueueItemFinishedEvent,
+    WorkerFrameQueueItemRenderingEvent,
+};
 use shared::messages::SenderHandle;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -144,7 +148,7 @@ impl Worker {
                 self.queue
                     .lock()
                     .await
-                    .add(FrameOnWorker::new(job, frame_index));
+                    .add(FrameOnWorker::new_queued(job, frame_index));
                 Ok(())
             }
             FrameQueueAddResult::Errored { reason } => Err(miette!(
@@ -162,7 +166,7 @@ impl Worker {
     /// and spawn tasks to run this connection, including handling incoming requests/responses/events.
     async fn accept_ws_stream_and_initialize_tasks(
         stream: TcpStream,
-        queue: Arc<Mutex<WorkerQueue>>,
+        worker_queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
         heartbeat_cancellation_token: CancellationToken,
         cluster_cancellation_token: CancellationToken,
@@ -225,9 +229,10 @@ impl Worker {
         ));
 
         worker_connection_future_set.spawn(Self::manage_incoming_messages(
+            address,
+            worker_queue,
             logger.clone(),
             receiver_arc.clone(),
-            queue,
             cluster_state,
             cluster_cancellation_token.clone(),
         ));
@@ -284,32 +289,50 @@ impl Worker {
     /// Waits for incoming messages and reacts according to their contents
     /// (e.g. a "frame finished" event will update our internal queue to reflect that).
     async fn manage_incoming_messages(
+        worker_address: SocketAddr,
+        worker_queue: Arc<Mutex<WorkerQueue>>,
         logger: Arc<Logger>,
-        event_dispatcher: Arc<WorkerReceiver>,
-        queue: Arc<Mutex<WorkerQueue>>,
+        receiver: Arc<WorkerReceiver>,
         cluster_state: Arc<ClusterManagerState>,
         cluster_cancellation_token: CancellationToken,
     ) -> Result<()> {
         logger.debug("Running task loop: handling incoming messages.");
 
-        let mut queue_item_finished_receiver =
-            event_dispatcher.frame_queue_item_finished_event_receiver();
+        let mut queue_item_rendering_receiver = receiver.frame_queue_item_rendering_event_receiver();
+        let mut queue_item_finished_receiver = receiver.frame_queue_item_finished_event_receiver();
 
         loop {
             tokio::select! {
-                notification = queue_item_finished_receiver.recv() => {
-                    let notification: WorkerFrameQueueItemFinishedEvent = notification.into_diagnostic()?;
+                rendering_event = queue_item_rendering_receiver.recv() => {
+                    let rendering_event: WorkerFrameQueueItemRenderingEvent = rendering_event.into_diagnostic()?;
 
                     debug!(
-                        "Received: Queue item finished, frame: {}",
-                        notification.frame_index
+                        "Received: queue item rendering, frame: {}",
+                        rendering_event.frame_index,
+                    );
+
+                    Self::mark_frame_as_rendering(
+                        rendering_event.job_name,
+                        rendering_event.frame_index,
+                        worker_address,
+                        logger.clone(),
+                        worker_queue.clone(),
+                        cluster_state.clone(),
+                    ).await?;
+                },
+                finished_event = queue_item_finished_receiver.recv() => {
+                    let finished_event: WorkerFrameQueueItemFinishedEvent = finished_event.into_diagnostic()?;
+
+                    debug!(
+                        "Received: queue item finished, frame: {}",
+                        finished_event.frame_index
                     );
 
                     Self::mark_frame_as_finished(
-                        notification.job_name,
-                        notification.frame_index,
+                        finished_event.job_name,
+                        finished_event.frame_index,
                         logger.clone(),
-                        queue.clone(),
+                        worker_queue.clone(),
                         cluster_state.clone()
                     ).await?;
                 },
@@ -384,25 +407,45 @@ impl Worker {
      * Internal state management methods
      */
 
+    async fn mark_frame_as_rendering(
+        job_name: String,
+        frame_index: usize,
+        worker_address: SocketAddr,
+        logger: Arc<Logger>,
+        worker_queue: Arc<Mutex<WorkerQueue>>,
+        cluster_state: Arc<ClusterManagerState>,
+    ) -> Result<()> {
+        {
+            let mut locked_queue = worker_queue.lock().await;
+            logger.trace("Marking frame as rendering in master's worker queue state.");
+            locked_queue.set_frame_rendering(job_name, frame_index)?;
+        }
+
+        logger.trace("Marking frame as rendering in master's full state.");
+        cluster_state
+            .mark_frame_as_rendering_on_worker(worker_address, frame_index)
+            .await?;
+
+        Ok(())
+    }
+
     /// Updates the internal `Worker` and slightly more global `ClusterManagerState` state
     /// to reflect the worker having finished its queued frame.
     async fn mark_frame_as_finished(
         job_name: String,
         frame_index: usize,
         logger: Arc<Logger>,
-        queue: Arc<Mutex<WorkerQueue>>,
+        worker_queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
     ) -> Result<()> {
         {
-            let mut locked_queue = queue.lock().await;
+            let mut locked_queue = worker_queue.lock().await;
             logger.trace("Removing frame from master's internal worker state.");
             locked_queue.remove(job_name, frame_index)?
         }
 
-        {
-            logger.trace("Marking frame as finished in master's full state.");
-            cluster_state.mark_frame_as_finished(frame_index).await?;
-        }
+        logger.trace("Marking frame as finished in master's full state.");
+        cluster_state.mark_frame_as_finished(frame_index).await?;
 
         Ok(())
     }

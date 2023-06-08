@@ -85,7 +85,6 @@ impl TryFrom<WebSocketMessage> for MasterJobFinishedRequest {
 
 
 
-// TODO Integrate
 pub static WORKER_JOB_FINISHED_RESPONSE_TYPE_NAME: &str = "response_job-finished";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

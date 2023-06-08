@@ -6,7 +6,7 @@ use log::{info, trace};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
-use shared::jobs::BlenderJob;
+use shared::jobs::{BlenderJob, DistributionStrategy};
 use shared::messages::job::MasterJobStartedEvent;
 use shared::results::performance::MasterPerformance;
 use shared::results::worker_trace::WorkerTrace;
@@ -14,9 +14,14 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::Instant;
 
 use crate::cluster::state::ClusterManagerState;
+use crate::cluster::strategies::{
+    naive_coarse_distribution_strategy,
+    naive_fine_distribution_strategy,
+};
 use crate::connection::Worker;
 
 pub mod state;
+pub mod strategies;
 
 
 pub struct ClusterManager {}
@@ -221,50 +226,29 @@ impl ClusterManager {
         /*
          * Run the Blender job to completion.
          */
-        loop {
-            trace!("Checking if all frames have been finished.");
-            if state.all_frames_finished().await {
-                break;
+        match job.frame_distribution_strategy {
+            DistributionStrategy::NaiveFine => {
+                info!("Running job with strategy: naive fine.");
+
+                naive_fine_distribution_strategy(&job, state.clone())
+                    .await
+                    .wrap_err_with(|| {
+                        miette!("Failed to complete naive fine distribution strategy.")
+                    })?;
             }
+            DistributionStrategy::NaiveCoarse { chunk_size } => {
+                info!(
+                    "Running job with strategy: naive coarse (chunk_size={})",
+                    chunk_size
+                );
 
-            // Queue frames onto workers that don't have any queued frames yet.
-
-            trace!("Locking worker list and distributing pending frames.");
-            let mut workers_locked = state.workers.lock().await;
-
-            for worker in workers_locked.values_mut() {
-                if worker.has_empty_queue().await {
-                    trace!(
-                        "Worker {} has empty queue, trying to queue.",
-                        worker.address
-                    );
-
-                    // Find next pending frame and queue it on this worker (if available).
-
-                    let next_frame_index = match state.next_pending_frame().await {
-                        Some(frame_index) => frame_index,
-                        None => {
-                            break;
-                        }
-                    };
-
-                    info!(
-                        "Queueing frame {} on worker {}.",
-                        next_frame_index, worker.address
-                    );
-
-                    worker.queue_frame(job.clone(), next_frame_index).await?;
-
-                    state
-                        .mark_frame_as_queued_on_worker(worker.address, next_frame_index)
-                        .await?;
-                }
+                naive_coarse_distribution_strategy(&job, state.clone(), chunk_size)
+                    .await
+                    .wrap_err_with(|| {
+                        miette!("Failed to complete naive coarse distribution strategy.")
+                    })?;
             }
-
-            drop(workers_locked);
-
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        };
 
         info!("All frames have been finished!");
 

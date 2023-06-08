@@ -6,9 +6,26 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy, Debug)]
 pub struct DynamicStrategyOptions {
+    /// This is essentially the maximum queue size for each worker.
+    /// When the amount of queued frames dips below this amount,
+    /// we'll try to queue more.
     pub target_queue_size: usize,
+
+    /// When all the frames have already been queued, we attempt to "steal"
+    /// frames from other workers. This specifies the minimum queue size
+    /// to attempt to steal some queued frame from a worker.
     pub min_queue_size_to_steal: usize,
+
+    /// When stealing a frame, we need to prevent the frame from constantly
+    /// being reassigned to various workers, wasting network traffic and performance.
+    /// This specifies how long a frame must stay queued on a worker for until
+    /// it can be reassigned (i.e. stolen) to a different worker.
     pub min_seconds_before_resteal_to_elsewhere: usize,
+
+    /// This should be larger than `min_seconds_before_resteal_to_elsewhere`,
+    /// and it essentially specifies how long until we can reassign a frame back to
+    /// the worker it was stolen from. Unless there are only two workers
+    /// this should happen very rarely, if at all.
     pub min_seconds_before_resteal_to_original_worker: usize,
 }
 

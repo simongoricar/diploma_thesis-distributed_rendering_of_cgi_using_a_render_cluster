@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
     let tracer = WorkerTraceBuilder::new_empty();
     let runner = BlenderJobRunner::new(
         blender_binary_path,
+        args.blender_prepend_arguments.unwrap_or_default(),
         base_directory_path,
         tracer.clone(),
     )?;

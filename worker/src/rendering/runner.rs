@@ -13,6 +13,8 @@ use crate::utilities::parse_with_base_directory_prefix;
 pub struct BlenderJobRunner {
     blender_binary_path: PathBuf,
 
+    blender_prepend_arguments: Vec<String>,
+
     base_directory_path: PathBuf,
 
     tracer: WorkerTraceBuilder,
@@ -21,6 +23,7 @@ pub struct BlenderJobRunner {
 impl BlenderJobRunner {
     pub fn new(
         blender_binary_path: PathBuf,
+        blender_prepend_arguments: String,
         base_directory_path: PathBuf,
         tracer: WorkerTraceBuilder,
     ) -> Result<Self> {
@@ -34,8 +37,17 @@ impl BlenderJobRunner {
             ));
         }
 
+        let parsed_prepend_arguments: Vec<String> = shlex::split(&blender_prepend_arguments)
+            .ok_or_else(|| miette!("Failed to parse prepend arguments."))?;
+
+        debug!(
+            "Parsed prepend arguments: {:?}",
+            parsed_prepend_arguments
+        );
+
         Ok(Self {
             blender_binary_path,
+            blender_prepend_arguments: parsed_prepend_arguments,
             base_directory_path,
             tracer,
         })
@@ -98,16 +110,21 @@ impl BlenderJobRunner {
         let time_render_start = Instant::now();
         let systime_render_start = SystemTime::now();
 
-        let blender_args = [
-            &blender_file_path_str,
-            "--background",
-            "--render-output",
-            &output_file_path_str,
-            "--render-format",
-            &job.output_file_format,
-            "--render-frame",
-            &frame_index.to_string(),
-        ];
+        let mut blender_args = self.blender_prepend_arguments.clone();
+        blender_args.extend(
+            [
+                &blender_file_path_str,
+                "--background",
+                "--render-output",
+                &output_file_path_str,
+                "--render-format",
+                &job.output_file_format,
+                "--render-frame",
+                &frame_index.to_string(),
+            ]
+            .into_iter()
+            .map(String::from),
+        );
 
         debug!("Blender arguments: {:?}", blender_args);
 

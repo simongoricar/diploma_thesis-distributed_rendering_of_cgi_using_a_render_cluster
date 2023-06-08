@@ -22,4 +22,11 @@ pub struct CLIArgs {
         help = "Path to the Blender binary to use for rendering."
     )]
     pub blender_binary_path: PathBuf,
+
+    #[arg(
+        short = 'p',
+        long = "blenderPrependArguments",
+        help = "Additional arguments to append after the binary and before the actual Blender arguments."
+    )]
+    pub blender_prepend_arguments: Option<String>,
 }

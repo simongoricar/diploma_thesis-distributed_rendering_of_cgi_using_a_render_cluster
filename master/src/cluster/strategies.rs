@@ -87,9 +87,11 @@ pub async fn naive_coarse_distribution_strategy(
 
             if worker_num_queued_frames < chunk_size {
                 let frames_to_limit = chunk_size - worker_num_queued_frames;
-                info!(
+                trace!(
                     "Worker {} has {} (< {}) queued frames, trying to top up.",
-                    worker.address, worker_num_queued_frames, chunk_size
+                    worker.address,
+                    worker_num_queued_frames,
+                    chunk_size
                 );
 
                 for _ in 0..frames_to_limit {

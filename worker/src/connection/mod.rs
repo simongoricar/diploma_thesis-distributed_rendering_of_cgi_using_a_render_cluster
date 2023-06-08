@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use futures_util::StreamExt;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::handshake::WorkerHandshakeResponse;
@@ -23,8 +23,8 @@ use shared::messages::queue::{
 };
 use shared::messages::SenderHandle;
 use shared::results::worker_trace::WorkerTraceBuilder;
-use tokio_tungstenite::connect_async;
-use url::Url;
+use tokio::net::TcpStream;
+use tokio_tungstenite::client_async;
 
 use crate::connection::receiver::MasterReceiver;
 use crate::connection::sender::MasterSender;
@@ -42,11 +42,25 @@ impl Worker {
     /// Whenever a frame is queued, we render it and respond with the item finished event
     /// (but only one frame at a time).
     pub async fn connect_and_run_to_job_completion(
-        master_server_url: Url,
+        master_server_url: &str,
         blender_runner: BlenderJobRunner,
         tracer: WorkerTraceBuilder,
     ) -> Result<()> {
-        let (stream, _) = connect_async(master_server_url).await.into_diagnostic()?;
+        let tcp_connection = Self::establish_tcp_connection_with_exponential_backoff(
+            master_server_url,
+            12,
+            2f64,
+            30f64,
+        )
+        .await
+        .wrap_err_with(|| miette!("Could not connect to master server."))?;
+
+        let (stream, _) = client_async(
+            format!("ws://{}", master_server_url),
+            tcp_connection,
+        )
+        .await
+        .into_diagnostic()?;
 
         // Split the WebSocket stream and prepare async channels, but don't actually perform the handshake and other stuff yet.
         // See `run_forever` for running the worker.
@@ -90,6 +104,43 @@ impl Worker {
         let _ = receiver.join().await;
 
         Ok(())
+    }
+
+    async fn establish_tcp_connection_with_exponential_backoff(
+        server_url: &str,
+        max_retries: usize,
+        exp_base: f64,
+        backoff_max_seconds: f64,
+    ) -> Result<TcpStream> {
+        let mut retries: usize = 0;
+
+        while retries < max_retries {
+            debug!(
+                "Trying to establish connection with master server at {}.",
+                server_url
+            );
+            let tcp_stream = TcpStream::connect(server_url).await;
+
+            if let Ok(stream) = tcp_stream {
+                return Ok(stream);
+            }
+
+            let mut retry_in = Duration::from_secs_f64(exp_base.powi(retries as i32));
+            if retry_in.as_secs_f64() > backoff_max_seconds {
+                retry_in = Duration::from_secs_f64(backoff_max_seconds);
+            }
+
+            warn!(
+                "Could not establish connection (try {}), retrying in {:.2} seconds.",
+                retries,
+                retry_in.as_secs_f64()
+            );
+            retries += 1;
+
+            tokio::time::sleep(retry_in).await;
+        }
+
+        Err(miette!("Failed to establish connection."))
     }
 
     /// Performs our internal WebSocket handshake

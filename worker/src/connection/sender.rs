@@ -11,7 +11,7 @@ use shared::messages::{OutgoingMessage, SenderHandle};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::WebSocketStream;
 
 pub struct MasterSender {
     sender_channel: Arc<UnboundedSender<OutgoingMessage>>,
@@ -21,7 +21,7 @@ pub struct MasterSender {
 
 impl MasterSender {
     pub fn new(
-        websocket_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+        websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
         global_cancellation_token: CancellationToken,
     ) -> Self {
         let (message_send_queue_tx, message_send_queue_rx) =
@@ -52,7 +52,7 @@ impl MasterSender {
      */
 
     async fn run(
-        mut websocket_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+        mut websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
         mut message_send_queue_receiver: UnboundedReceiver<OutgoingMessage>,
         global_cancellation_token: CancellationToken,
     ) -> Result<()> {

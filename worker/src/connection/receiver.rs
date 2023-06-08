@@ -16,7 +16,7 @@ use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::WebSocketStream;
 
 #[derive(Clone, Debug)]
 pub struct BroadcastSenders {
@@ -54,7 +54,7 @@ impl MasterReceiver {
     /// Initialize a new `MasterEventDispatcher`, consuming the WebSocket connection's
     /// async receiver channel.
     pub fn new(
-        websocket_stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        websocket_stream: SplitStream<WebSocketStream<TcpStream>>,
         cancellation_token: CancellationToken,
     ) -> Self {
         // Initialize broadcast channels.
@@ -112,7 +112,7 @@ impl MasterReceiver {
     /// and broadcasting the to subscribed `tokio::broadcast::Receiver`s.
     async fn run(
         senders: BroadcastSenders,
-        mut websocket_stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        mut websocket_stream: SplitStream<WebSocketStream<TcpStream>>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         info!("MasterReceiver: Running event distribution loop.");

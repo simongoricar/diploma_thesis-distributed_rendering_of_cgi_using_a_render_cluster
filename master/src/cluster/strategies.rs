@@ -177,8 +177,8 @@ fn select_best_frame_to_steal<'a>(
                     >= options.min_seconds_before_resteal_to_original_worker as f64
                 {
                     least_stolen_frame = Some(frame);
-                    continue;
                 }
+                continue;
             }
         }
 

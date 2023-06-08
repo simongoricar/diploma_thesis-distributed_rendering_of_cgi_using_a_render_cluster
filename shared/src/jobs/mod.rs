@@ -11,9 +11,8 @@ pub enum DistributionStrategy {
     #[serde(rename = "naive-fine")]
     NaiveFine,
 
-    NaiveCoarse {
-        chunk_size: usize,
-    },
+    #[serde(rename = "naive-coarse")]
+    NaiveCoarse { chunk_size: usize },
     // TODO
     // Dynamic
 }

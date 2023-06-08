@@ -406,7 +406,7 @@ impl Worker {
             }
 
             if last_heartbeat_time.elapsed() > Duration::from_secs(10) {
-                logger.debug("Sending heartbeat request to worker.");
+                logger.trace("Sending heartbeat request to worker.");
                 sender_handle
                     .send_message(MasterHeartbeatRequest::new())
                     .await?;
@@ -420,7 +420,7 @@ impl Worker {
 
                 let time_heartbeat_latency = time_heartbeat_start.elapsed();
 
-                logger.debug(format!(
+                logger.trace(format!(
                     "Worker responded to heartbeat request in {:.4} seconds.",
                     time_heartbeat_latency.as_secs_f64(),
                 ));

@@ -24,3 +24,5 @@ serialization/src/compiled_definitions
 *.blend1
 blender-projects/**/results
 blender-projects/**/*.png
+blender-projects/**/*.jpg
+blender-projects/**/*.jpeg

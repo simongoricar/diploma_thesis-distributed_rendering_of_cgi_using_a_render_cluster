@@ -3,12 +3,19 @@ use std::time::SystemTime;
 
 use miette::{miette, Result};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
+use serde_with::TimestampSecondsWithFrac;
 use tokio::sync::Mutex;
 
+#[serde_as]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub struct WorkerFrameTrace {
     pub frame_index: usize,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
     pub frame_start_time: SystemTime,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
     pub frame_finish_time: SystemTime,
 }
 
@@ -72,7 +79,7 @@ impl WorkerTraceBuilder {
     pub async fn build(&self) -> Result<WorkerTrace> {
         let trace = self.0.lock().await;
 
-        let result = Ok(WorkerTrace {
+        Ok(WorkerTrace {
             total_queued_frames: trace.total_queued_frames,
             total_queued_frames_removed_from_queue: trace.total_queued_frames_removed_from_queue,
             job_start_time: trace
@@ -82,9 +89,7 @@ impl WorkerTraceBuilder {
                 .job_finish_time
                 .ok_or_else(|| miette!("Missing job finish time, can't build."))?,
             frame_render_times: trace.frame_render_times.clone(),
-        });
-
-        result
+        })
     }
 
 

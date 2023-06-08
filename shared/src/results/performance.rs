@@ -2,11 +2,15 @@ use std::time::Duration;
 
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
+use serde_with::DurationSecondsWithFrac;
 
 use crate::results::worker_trace::WorkerTrace;
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct MasterPerformance {
+    #[serde_as(as = "DurationSecondsWithFrac<f64>")]
     pub total_time: Duration,
 }
 
@@ -17,6 +21,7 @@ impl MasterPerformance {
 }
 
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct WorkerPerformance {
     pub total_frames_rendered: usize,
@@ -26,12 +31,15 @@ pub struct WorkerPerformance {
     pub total_frames_stolen_from_queue: usize,
 
     /// Total worker run time.
+    #[serde_as(as = "DurationSecondsWithFrac<f64>")]
     pub total_time: Duration,
 
     /// Total time spent rendering frames on this worker.
+    #[serde_as(as = "DurationSecondsWithFrac<f64>")]
     pub total_rendering_time: Duration,
 
     /// Total time spent preparing or waiting for new frames on this worker.
+    #[serde_as(as = "DurationSecondsWithFrac<f64>")]
     pub total_idle_time: Duration,
 }
 
@@ -52,11 +60,14 @@ impl WorkerPerformance {
         let mut total_rendering_time = Duration::new(0, 0);
         let mut total_idle_time = Duration::new(0, 0);
 
-        for frame_index in 0..trace.frame_render_times.len() {
+        let total_frames = trace.frame_render_times.len();
+
+        for frame_index in 0..total_frames {
             let current_frame = trace.frame_render_times[frame_index];
 
             // Calculate idle time from beginning of job or previous frame.
             if frame_index > 0 {
+                // First frame
                 let previous_frame = trace.frame_render_times[frame_index - 1];
 
                 let idle_time_between_frames = current_frame
@@ -66,6 +77,15 @@ impl WorkerPerformance {
                     .wrap_err_with(|| miette!("Could not calculate idle time between frames."))?;
 
                 total_idle_time += idle_time_between_frames;
+            } else if frame_index == total_frames - 1 {
+                // Last frame
+                let idle_time_until_job_completion = trace
+                    .job_finish_time
+                    .duration_since(current_frame.frame_finish_time)
+                    .into_diagnostic()
+                    .wrap_err_with(|| miette!("Could not calculate idle time after last frame."))?;
+
+                total_idle_time += idle_time_until_job_completion;
             } else {
                 let idle_time_before_first_frame = current_frame
                     .frame_start_time

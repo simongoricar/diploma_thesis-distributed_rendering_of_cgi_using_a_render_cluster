@@ -2,17 +2,253 @@ pub mod cli;
 pub mod cluster;
 pub mod connection;
 
+use std::collections::HashMap;
+use std::fs;
+use std::fs::File;
+use std::io::Write;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::time::Duration;
 
+use chrono::{DateTime, Local};
 use clap::Parser;
 use log::info;
 use miette::{miette, Context, IntoDiagnostic, Result};
+use serde::Serialize;
 use shared::jobs::BlenderJob;
-use shared::results::performance::WorkerPerformance;
+use shared::results::performance::{MasterPerformance, WorkerPerformance};
+use shared::results::worker_trace::WorkerTrace;
 
 use crate::cli::{CLIArgs, CLICommand};
 use crate::cluster::ClusterManager;
+
+fn parse_worker_traces(
+    worker_traces: Vec<(SocketAddr, WorkerTrace)>,
+) -> Result<Vec<(SocketAddr, WorkerPerformance)>> {
+    worker_traces
+        .into_iter()
+        .map(|(address, trace)| {
+            let performance = WorkerPerformance::from_worker_trace(&trace);
+
+            match performance {
+                Ok(perf) => Ok((address, perf)),
+                Err(error) => Err(error),
+            }
+        })
+        .collect::<Result<Vec<(SocketAddr, WorkerPerformance)>>>()
+}
+
+#[derive(Serialize)]
+struct RawTraceWrapper {
+    pub worker_traces: HashMap<String, WorkerTrace>,
+}
+
+fn save_raw_traces(
+    start_time: &DateTime<Local>,
+    job: &BlenderJob,
+    output_directory: &Path,
+    worker_traces: &[(SocketAddr, WorkerTrace)],
+) -> Result<()> {
+    let traces_hash_map = worker_traces
+        .iter()
+        .map(|(address, trace)| {
+            (
+                format!("{}:{}", address.ip(), address.port()),
+                trace.clone(),
+            )
+        })
+        .collect();
+
+    let wrapped_raw_traces = RawTraceWrapper {
+        worker_traces: traces_hash_map,
+    };
+
+    let serialized_traces = serde_json::to_string_pretty(&wrapped_raw_traces)
+        .into_diagnostic()
+        .wrap_err_with(|| miette!("Failed to serialize raw traces."))?;
+
+
+    let raw_traces_file_name = format!(
+        "{}_job-{}_raw-trace.json",
+        start_time.format("%Y-%m-%d_%H-%M-%S"),
+        job.job_name.replace(" ", "_"),
+    );
+    let raw_traces_full_path = output_directory.join(raw_traces_file_name);
+
+
+    if !output_directory.is_dir() {
+        fs::create_dir_all(output_directory)
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Failed to create output directory."))?;
+    }
+
+    let mut output_file = File::create(raw_traces_full_path)
+        .into_diagnostic()
+        .wrap_err_with(|| miette!("Failed to create raw traces file."))?;
+
+    output_file
+        .write_all(serialized_traces.as_bytes())
+        .into_diagnostic()
+        .wrap_err_with(|| miette!("Failed to write raw traces to output file."))?;
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct ProcessedResultsWrapper {
+    pub master_performance: MasterPerformance,
+    pub worker_performance: HashMap<String, WorkerPerformance>,
+}
+
+fn save_processed_results(
+    start_time: &DateTime<Local>,
+    job: &BlenderJob,
+    output_directory: &Path,
+    master_performance: &MasterPerformance,
+    worker_performance: &Vec<(SocketAddr, WorkerPerformance)>,
+) -> Result<()> {
+    let worker_perf_map: HashMap<String, WorkerPerformance> = worker_performance
+        .iter()
+        .map(|(address, performance)| {
+            (
+                format!("{}:{}", address.ip(), address.port()),
+                performance.clone(),
+            )
+        })
+        .collect();
+
+    let wrapped_results = ProcessedResultsWrapper {
+        master_performance: master_performance.clone(),
+        worker_performance: worker_perf_map,
+    };
+
+    let serialized_results = serde_json::to_string_pretty(&wrapped_results)
+        .into_diagnostic()
+        .wrap_err_with(|| miette!("Failed to serialize processed results."))?;
+
+
+    let processed_results_file_name = format!(
+        "{}_job-{}_processed-results.json",
+        start_time.format("%Y-%m-%d_%H-%M-%S"),
+        job.job_name.replace(" ", "_"),
+    );
+    let processed_results_full_path = output_directory.join(processed_results_file_name);
+
+    if !output_directory.is_dir() {
+        fs::create_dir_all(output_directory)
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Failed to create output directory."))?;
+    }
+
+    let mut output_file = File::create(processed_results_full_path)
+        .into_diagnostic()
+        .wrap_err_with(|| miette!("Failed to create processed results file."))?;
+
+    output_file
+        .write_all(serialized_results.as_bytes())
+        .into_diagnostic()
+        .wrap_err_with(|| miette!("Failed to write processed results to output file."))?;
+
+    Ok(())
+}
+
+fn print_results(
+    master_performance: &MasterPerformance,
+    worker_performance: &Vec<(SocketAddr, WorkerPerformance)>,
+) {
+    /*
+     * Individual worker statistics
+     */
+    println!();
+    println!("Worker performance results:");
+    println!();
+
+    let mut cumulative_rendering_time = Duration::new(0, 0);
+    let mut cumulative_idle_time = Duration::new(0, 0);
+
+    let mut cumulative_frames_queued: usize = 0;
+    let mut cumulative_frames_rendered: usize = 0;
+    let mut cumulative_frames_stolen: usize = 0;
+
+    for (address, performance) in worker_performance {
+        cumulative_rendering_time += performance.total_rendering_time;
+        cumulative_idle_time += performance.total_idle_time;
+
+        cumulative_frames_queued += performance.total_frames_queued;
+        cumulative_frames_rendered += performance.total_frames_rendered;
+        cumulative_frames_stolen += performance.total_frames_stolen_from_queue;
+
+
+        println!("[Worker {}:{}]", address.ip(), address.port());
+
+        println!(
+            "Worker on-job time = {:.6} seconds.",
+            performance.total_time.as_secs_f64()
+        );
+        println!(
+            "Worker rendering time = {:.6} seconds.",
+            performance.total_rendering_time.as_secs_f64()
+        );
+        println!(
+            "Worker idle time = {:.6} seconds.",
+            performance.total_idle_time.as_secs_f64()
+        );
+
+        println!(
+            "Worker queued frames = {}",
+            performance.total_frames_queued
+        );
+        println!(
+            "Worker frames rendered = {}",
+            performance.total_frames_rendered
+        );
+        println!(
+            "Worker frames stolen from its queue before rendered = {}",
+            performance.total_frames_stolen_from_queue
+        );
+
+        println!();
+    }
+
+    /*
+     * Cumulative worker statistics
+     */
+    println!("[Cumulative]");
+
+    println!(
+        "Cumulative rendering time = {:.6} seconds.",
+        cumulative_rendering_time.as_secs_f64()
+    );
+    println!(
+        "Cumulative idle time = {:.6} seconds.",
+        cumulative_idle_time.as_secs_f64()
+    );
+
+    println!(
+        "Cumulative queued frames = {}",
+        cumulative_frames_queued
+    );
+    println!(
+        "Cumulative frames rendered = {}",
+        cumulative_frames_rendered
+    );
+    println!(
+        "Cumulative frames stolen from workers' queues before rendered = {}",
+        cumulative_frames_stolen
+    );
+
+    println!();
+
+    /*
+     * Master statistics
+     */
+    println!("[Master]");
+
+    println!(
+        "Total job duration = {:.6} seconds.",
+        master_performance.total_time.as_secs_f64()
+    )
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,14 +258,17 @@ async fn main() -> Result<()> {
 
     #[allow(irrefutable_let_patterns)]
     if let CLICommand::RunJob(run_job_args) = args.command {
+        let start_time = Local::now();
+
         info!("Loading job file.");
         let job = BlenderJob::load_from_file(run_job_args.job_file_path)
             .wrap_err_with(|| miette!("Could not load Blender job from file."))?;
 
         info!("Initializing cluster manager.");
-        let manager = ClusterManager::new_from_job(args.bind_to_host, args.bind_to_port, job)
-            .await
-            .wrap_err_with(|| miette!("Could not initialize cluster manager."))?;
+        let manager =
+            ClusterManager::new_from_job(args.bind_to_host, args.bind_to_port, job.clone())
+                .await
+                .wrap_err_with(|| miette!("Could not initialize cluster manager."))?;
 
         info!("Running server to job completion.");
         let (master_performance, worker_traces) = manager
@@ -38,110 +277,28 @@ async fn main() -> Result<()> {
             .wrap_err_with(|| miette!("Could not run server and job to completion."))?;
         info!("-- JOB COMPLETE, ANALYZING TRACES --");
 
-        let worker_performance_traces = worker_traces
-            .into_iter()
-            .map(|(address, trace)| {
-                let performance = WorkerPerformance::from_worker_trace(&trace);
+        // Parse and save the results.
+        info!("Saving raw traces.");
+        save_raw_traces(
+            &start_time,
+            &job,
+            &run_job_args.results_directory_path,
+            &worker_traces,
+        )?;
 
-                match performance {
-                    Ok(perf) => Ok((address, perf)),
-                    Err(error) => Err(error),
-                }
-            })
-            .collect::<Result<Vec<(SocketAddr, WorkerPerformance)>>>()?;
+        info!("Processing traces.");
+        let worker_performance = parse_worker_traces(worker_traces)?;
 
+        info!("Saving processed results.");
+        save_processed_results(
+            &start_time,
+            &job,
+            &run_job_args.results_directory_path,
+            &master_performance,
+            &worker_performance,
+        )?;
 
-        /*
-         * Individual worker statistics
-         */
-        println!("Worker performance results:");
-        println!();
-
-        let mut cumulative_rendering_time = Duration::new(0, 0);
-        let mut cumulative_idle_time = Duration::new(0, 0);
-
-        let mut cumulative_frames_queued: usize = 0;
-        let mut cumulative_frames_rendered: usize = 0;
-        let mut cumulative_frames_stolen: usize = 0;
-
-        for (address, performance) in worker_performance_traces {
-            cumulative_rendering_time += performance.total_rendering_time;
-            cumulative_idle_time += performance.total_idle_time;
-
-            cumulative_frames_queued += performance.total_frames_queued;
-            cumulative_frames_rendered += performance.total_frames_rendered;
-            cumulative_frames_stolen += performance.total_frames_stolen_from_queue;
-
-
-            println!("[Worker {}:{}]", address.ip(), address.port());
-
-            println!(
-                "Worker on-job time = {:.6} seconds.",
-                performance.total_time.as_secs_f64()
-            );
-            println!(
-                "Worker rendering time = {:.6} seconds.",
-                performance.total_rendering_time.as_secs_f64()
-            );
-            println!(
-                "Worker idle time = {:.6} seconds.",
-                performance.total_idle_time.as_secs_f64()
-            );
-
-            println!(
-                "Worker queued frames = {}",
-                performance.total_frames_queued
-            );
-            println!(
-                "Worker frames rendered = {}",
-                performance.total_frames_rendered
-            );
-            println!(
-                "Worker frames stolen from its queue before rendered = {}",
-                performance.total_frames_stolen_from_queue
-            );
-
-            println!();
-        }
-
-        /*
-         * Cumulative worker statistics
-         */
-        println!("[Cumulative]");
-
-        println!(
-            "Cumulative rendering time = {:.6} seconds.",
-            cumulative_rendering_time.as_secs_f64()
-        );
-        println!(
-            "Cumulative idle time = {:.6} seconds.",
-            cumulative_idle_time.as_secs_f64()
-        );
-
-        println!(
-            "Cumulative queued frames = {}",
-            cumulative_frames_queued
-        );
-        println!(
-            "Cumulative frames rendered = {}",
-            cumulative_frames_rendered
-        );
-        println!(
-            "Cumulative frames stolen from workers' queues before rendered = {}",
-            cumulative_frames_stolen
-        );
-
-        println!();
-
-        /*
-         * Master statistics
-         */
-        println!("[Master]");
-
-        println!(
-            "Total job duration = {:.6} seconds.",
-            master_performance.total_time.as_secs_f64()
-        )
+        print_results(&master_performance, &worker_performance);
     }
 
     Ok(())

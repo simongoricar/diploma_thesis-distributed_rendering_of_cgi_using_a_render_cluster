@@ -21,4 +21,6 @@ serialization/tools
 serialization/src/compiled_definitions
 
 ## Other assets
+*.blend1
+blender-projects/**/results
 blender-projects/**/*.png

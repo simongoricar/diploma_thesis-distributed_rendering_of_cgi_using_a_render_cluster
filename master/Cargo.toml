@@ -11,6 +11,8 @@ shared = { path = "../shared" }
 tokio = { version = "1.27.0", features = ["full"] }
 tokio-tungstenite = "0.19.0"
 miette = { version = "5.7.0", features = ["fancy"] }
+serde = { version = "1.0.162", features = ["derive"] }
+serde_json = "1.0.96"
 log = "0.4.17"
 env_logger = "0.10.0"
 thiserror = "1.0.40"
@@ -19,3 +21,4 @@ futures-channel = "0.3.28"
 futures-util = "0.3.28"
 rand = "0.8.5"
 scopeguard = "1.1.0"
+chrono = "0.4.26"

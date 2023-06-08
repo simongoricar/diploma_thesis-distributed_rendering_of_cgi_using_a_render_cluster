@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -20,5 +22,12 @@ pub enum CLICommand {
 
 #[derive(Args, Eq, PartialEq)]
 pub struct RunJob {
+    #[arg(help = "Path to the TOML file describing the job.")]
     pub job_file_path: String,
+
+    #[arg(
+        long = "resultsDirectory",
+        help = "Directory to save the cluster results in."
+    )]
+    pub results_directory_path: PathBuf,
 }

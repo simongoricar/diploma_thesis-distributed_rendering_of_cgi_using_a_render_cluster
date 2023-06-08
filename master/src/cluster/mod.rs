@@ -249,23 +249,15 @@ impl ClusterManager {
                         miette!("Failed to complete naive coarse distribution strategy.")
                     })
             }
-            DistributionStrategy::Dynamic {
-                target_queue_size,
-                min_queue_size_to_steal,
-            } => {
+            DistributionStrategy::Dynamic(options) => {
                 info!(
                     "Running job with strategy: dynamic (target_queue_size={})",
-                    target_queue_size
+                    options.target_queue_size
                 );
 
-                dynamic_distribution_strategy(
-                    &job,
-                    state.clone(),
-                    target_queue_size,
-                    min_queue_size_to_steal,
-                )
-                .await
-                .wrap_err_with(|| miette!("Failed to complete dynamic distribution strategy."))
+                dynamic_distribution_strategy(&job, state.clone(), options)
+                    .await
+                    .wrap_err_with(|| miette!("Failed to complete dynamic distribution strategy."))
             }
         };
 

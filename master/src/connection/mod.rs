@@ -143,7 +143,12 @@ impl Worker {
     }
 
     /// Queue a frame onto the worker. This sends a WebSocket message and waits for the worker response.
-    pub async fn queue_frame(&self, job: BlenderJob, frame_index: usize) -> Result<()> {
+    pub async fn queue_frame(
+        &self,
+        job: BlenderJob,
+        frame_index: usize,
+        stolen_from: Option<SocketAddr>,
+    ) -> Result<()> {
         let add_result = self
             .requester
             .frame_queue_add_item(job.clone(), frame_index)
@@ -151,10 +156,11 @@ impl Worker {
 
         match add_result {
             FrameQueueAddResult::AddedToQueue => {
-                self.queue
-                    .lock()
-                    .await
-                    .add(FrameOnWorker::new_queued(job, frame_index));
+                self.queue.lock().await.add(FrameOnWorker::new_queued(
+                    job,
+                    frame_index,
+                    stolen_from,
+                ));
                 Ok(())
             }
             FrameQueueAddResult::Errored { reason } => Err(miette!(

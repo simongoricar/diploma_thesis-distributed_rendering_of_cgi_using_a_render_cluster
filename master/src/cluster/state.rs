@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::Instant;
 
 use miette::miette;
 use miette::Result;
@@ -11,8 +12,14 @@ use crate::connection::Worker;
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub enum FrameStatus {
     Pending,
-    QueuedOnWorker { worker: SocketAddr },
-    RenderingOnWorker { worker: SocketAddr },
+    QueuedOnWorker {
+        worker: SocketAddr,
+        queued_at: Instant,
+        stolen_from: Option<SocketAddr>,
+    },
+    RenderingOnWorker {
+        worker: SocketAddr,
+    },
     Finished,
 }
 
@@ -75,6 +82,7 @@ impl ClusterManagerState {
         &self,
         worker_address: SocketAddr,
         frame_index: usize,
+        stolen_from: Option<SocketAddr>,
     ) -> Result<()> {
         let mut locked_frames = self.job_frames.lock().await;
 
@@ -85,6 +93,8 @@ impl ClusterManagerState {
 
         frame.status = FrameStatus::QueuedOnWorker {
             worker: worker_address,
+            queued_at: Instant::now(),
+            stolen_from,
         };
         Ok(())
     }

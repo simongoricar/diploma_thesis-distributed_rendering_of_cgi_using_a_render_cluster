@@ -4,6 +4,13 @@ use std::path::Path;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy, Debug)]
+pub struct DynamicStrategyOptions {
+    pub target_queue_size: usize,
+    pub min_queue_size_to_steal: usize,
+    pub min_seconds_before_resteal_to_elsewhere: usize,
+    pub min_seconds_before_resteal_to_original_worker: usize,
+}
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy, Debug)]
 #[serde(tag = "strategy_type")]
@@ -15,10 +22,7 @@ pub enum DistributionStrategy {
     NaiveCoarse { target_queue_size: usize },
 
     #[serde(rename = "dynamic")]
-    Dynamic {
-        target_queue_size: usize,
-        min_queue_size_to_steal: usize,
-    },
+    Dynamic(DynamicStrategyOptions),
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]

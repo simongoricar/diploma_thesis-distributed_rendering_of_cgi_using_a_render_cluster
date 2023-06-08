@@ -1,5 +1,7 @@
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use miette::miette;
 use miette::Result;
@@ -19,14 +21,20 @@ pub struct FrameOnWorker {
     pub frame_index: usize,
 
     pub status: FrameStatusOnWorker,
+    
+    pub queued_at: Instant,
+    
+    pub stolen_from: Option<SocketAddr>,
 }
 
 impl FrameOnWorker {
-    pub fn new_queued(job: BlenderJob, frame_index: usize) -> Self {
+    pub fn new_queued(job: BlenderJob, frame_index: usize, stolen_from: Option<SocketAddr>) -> Self {
         Self {
             job,
             frame_index,
             status: FrameStatusOnWorker::Queued,
+            queued_at: Instant::now(),
+            stolen_from,
         }
     }
 
@@ -38,9 +46,9 @@ impl FrameOnWorker {
 /// Master server's replica of the worker queue.
 /// Can get out of sync with the actual worker, but unless something goes horribly wrong, not for long.
 pub struct WorkerQueue {
-    queue: Vec<FrameOnWorker>,
+    pub queue: Vec<FrameOnWorker>,
 
-    atomic_queue_size: Arc<AtomicUsize>,
+    pub atomic_queue_size: Arc<AtomicUsize>,
 }
 
 impl WorkerQueue {

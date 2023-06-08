@@ -22,12 +22,12 @@ pub struct BlenderJobRunner {
 
 impl BlenderJobRunner {
     pub fn new(
-        blender_binary_path: PathBuf,
+        blender_binary: PathBuf,
         blender_prepend_arguments: String,
         base_directory_path: PathBuf,
         tracer: WorkerTraceBuilder,
     ) -> Result<Self> {
-        if !blender_binary_path.is_file() {
+        if !blender_binary.is_file() {
             return Err(miette!("Provided Blender path is not a file."));
         }
 
@@ -46,7 +46,7 @@ impl BlenderJobRunner {
         );
 
         Ok(Self {
-            blender_binary_path,
+            blender_binary_path: blender_binary,
             blender_prepend_arguments: parsed_prepend_arguments,
             base_directory_path,
             tracer,

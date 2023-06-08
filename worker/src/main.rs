@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
 
     info!("Initializing BlenderJobRunner.");
 
-    let blender_binary_path = parse_with_tilde_support(&args.blender_binary_path)
+    let blender_binary_path = parse_with_tilde_support(&args.blender_binary)
         .wrap_err_with(|| miette!("Could not parse blender binary path with tilde support."))?;
     let base_directory_path = parse_with_tilde_support(&args.base_directory_path)
         .wrap_err_with(|| miette!("Could not parse base directory path with tilde support."))?;

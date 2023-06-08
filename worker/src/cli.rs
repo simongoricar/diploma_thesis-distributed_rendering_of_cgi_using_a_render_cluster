@@ -19,9 +19,9 @@ pub struct CLIArgs {
     #[arg(
         short = 'b',
         long = "blenderBinary",
-        help = "Path to the Blender binary to use for rendering."
+        help = "Blender binary to use for rendering."
     )]
-    pub blender_binary_path: PathBuf,
+    pub blender_binary: PathBuf,
 
     #[arg(
         short = 'p',

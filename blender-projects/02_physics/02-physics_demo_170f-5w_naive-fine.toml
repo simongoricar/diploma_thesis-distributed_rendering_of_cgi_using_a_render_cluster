@@ -1,13 +1,16 @@
-job_name = "02_physics_173f"
-job_description = "Simple physics animation (173 frames)."
+job_name = "02_physics_170f-5w"
+job_description = "Simple physics animation (173 frames, 5 workers)."
 
 project_file_path = "%BASE%/blender-projects/02_physics/02_physics.blend"
 
 frame_range_from = 1
-frame_range_to = 173
+frame_range_to = 170
 
-wait_for_number_of_workers = 2
+wait_for_number_of_workers = 5
 
 output_directory_path = "%BASE%/blender-projects/02_physics/output"
 output_file_name_format = "#####"
 output_file_format = "PNG"
+
+[frame_distribution_strategy]
+strategy_type = "naive-fine"

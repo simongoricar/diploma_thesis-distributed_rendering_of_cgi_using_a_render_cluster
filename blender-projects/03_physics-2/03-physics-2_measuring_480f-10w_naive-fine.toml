@@ -1,0 +1,16 @@
+job_name = "03_physics-2_measuring_480f-10w"
+job_description = "Simple physics animation V2 (250 frames, 10 workers)."
+
+project_file_path = "%BASE%/blender-projects/03_physics-2/03_physics-2.blend"
+
+frame_range_from = 1
+frame_range_to = 480
+
+wait_for_number_of_workers = 10
+
+output_directory_path = "%BASE%/blender-projects/03_physics-2/output"
+output_file_name_format = "#####"
+output_file_format = "JPEG"
+
+[frame_distribution_strategy]
+strategy_type = "naive-fine"

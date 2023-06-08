@@ -42,8 +42,7 @@ impl ClusterManager {
             cancellation_token.clone(),
         );
 
-        let job_processing_future =
-            Self::wait_for_readiness_and_complete_job(job, shared_state.clone());
+        let job_processing_future = Self::wait_for_workers_and_run_job(job, shared_state.clone());
 
         // Spawn the acceptor in the background and wait for the job runner to complete first.
         let worker_connection_acceptor_handle = tokio::spawn(worker_connection_acceptor_future);
@@ -157,10 +156,13 @@ impl ClusterManager {
         Ok(())
     }
 
-    async fn wait_for_readiness_and_complete_job(
+    async fn wait_for_workers_and_run_job(
         job: BlenderJob,
         state: Arc<ClusterManagerState>,
     ) -> Result<MasterPerformance> {
+        /*
+         * Wait for `job.wait_for_number_of_workers` workers to connect.
+         */
         info!(
             "Waiting for at least {} workers to connect before starting job.",
             job.wait_for_number_of_workers
@@ -185,7 +187,9 @@ impl ClusterManager {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
-        // Send job starting event to all clients
+        /*
+         * Send job starting events to all connected workers.
+         */
         let time_job_start = Instant::now();
 
         {
@@ -214,15 +218,20 @@ impl ClusterManager {
 
         // FIXME If a client connects after a job has started, they will not receive the job start event.
 
+        /*
+         * Run the Blender job to completion.
+         */
         loop {
             trace!("Checking if all frames have been finished.");
             if state.all_frames_finished().await {
                 break;
             }
 
-            // Queue frames onto worker that don't have any queued frames yet.
+            // Queue frames onto workers that don't have any queued frames yet.
+
             trace!("Locking worker list and distributing pending frames.");
             let mut workers_locked = state.workers.lock().await;
+
             for worker in workers_locked.values_mut() {
                 if worker.has_empty_queue().await {
                     trace!(
@@ -230,9 +239,7 @@ impl ClusterManager {
                         worker.address
                     );
 
-                    /*
-                     * Find next pending frame and queue it on this worker (if available).
-                     */
+                    // Find next pending frame and queue it on this worker (if available).
 
                     let next_frame_index = match state.next_pending_frame().await {
                         Some(frame_index) => frame_index,
@@ -256,7 +263,7 @@ impl ClusterManager {
 
             drop(workers_locked);
 
-            tokio::time::sleep(Duration::from_secs_f64(0.25f64)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         info!("All frames have been finished!");

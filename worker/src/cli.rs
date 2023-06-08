@@ -26,7 +26,14 @@ pub struct CLIArgs {
     #[arg(
         short = 'p',
         long = "blenderPrependArguments",
-        help = "Additional arguments to append after the binary and before the actual Blender arguments."
+        help = "Additional arguments to append after the binary and before the actual Blender arguments when rendering."
     )]
     pub blender_prepend_arguments: Option<String>,
+
+    #[arg(
+        short = 'a',
+        long = "blenderAppendArguments",
+        help = "Additional arguments to append after the all other arguments when rendering."
+    )]
+    pub blender_append_arguments: Option<String>,
 }

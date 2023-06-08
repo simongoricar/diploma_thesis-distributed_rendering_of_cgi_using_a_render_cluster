@@ -15,6 +15,8 @@ pub struct BlenderJobRunner {
 
     blender_prepend_arguments: Vec<String>,
 
+    blender_append_arguments: Vec<String>,
+
     base_directory_path: PathBuf,
 
     tracer: WorkerTraceBuilder,
@@ -23,7 +25,8 @@ pub struct BlenderJobRunner {
 impl BlenderJobRunner {
     pub fn new(
         blender_binary: PathBuf,
-        blender_prepend_arguments: String,
+        blender_prepend_arguments: Option<String>,
+        blender_append_arguments: Option<String>,
         base_directory_path: PathBuf,
         tracer: WorkerTraceBuilder,
     ) -> Result<Self> {
@@ -37,8 +40,18 @@ impl BlenderJobRunner {
             ));
         }
 
-        let parsed_prepend_arguments: Vec<String> = shlex::split(&blender_prepend_arguments)
-            .ok_or_else(|| miette!("Failed to parse prepend arguments."))?;
+        let parsed_prepend_arguments: Vec<String> = if let Some(prepend) = blender_prepend_arguments
+        {
+            shlex::split(&prepend).ok_or_else(|| miette!("Failed to parse prepend arguments."))?
+        } else {
+            Vec::new()
+        };
+
+        let parsed_append_arguments: Vec<String> = if let Some(append) = blender_append_arguments {
+            shlex::split(&append).ok_or_else(|| miette!("Failed to parse append arguments."))?
+        } else {
+            Vec::new()
+        };
 
         debug!(
             "Parsed prepend arguments: {:?}",
@@ -48,6 +61,7 @@ impl BlenderJobRunner {
         Ok(Self {
             blender_binary_path: blender_binary,
             blender_prepend_arguments: parsed_prepend_arguments,
+            blender_append_arguments: parsed_append_arguments,
             base_directory_path,
             tracer,
         })
@@ -125,6 +139,7 @@ impl BlenderJobRunner {
             .into_iter()
             .map(String::from),
         );
+        blender_args.extend(self.blender_append_arguments.iter().cloned());
 
         debug!("Blender arguments: {:?}", blender_args);
 

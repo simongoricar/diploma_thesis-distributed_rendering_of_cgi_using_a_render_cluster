@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
       NUM_WORKERS="${1#*=}"
       ;;
     *)
-      printf "* Error: Invalid argument *\n"
+      echo -e "* Error: Invalid argument: \"$1\" *\n"
       exit 1
   esac
   shift
@@ -51,6 +51,7 @@ if [[ -z "$NUM_WORKERS" ]]; then
   exit 2
 fi
 
+FORMATTED_CURRENT_DATE_TIME=$(date +%Y-%m-%d_%H-%M-%S)
 
 # Run configuration
 RUN_HOST="nsc-login1"
@@ -78,10 +79,10 @@ cd "$RUN_BASE_DIRECTORY"
 
 
 echo "Starting master on login instance..."
-RUST_LOG="debug" screen -d -m -t "cm_$RUN_NAME" -S "cm_$RUN_NAME" -L -Logfile "cm_$RUN_NAME.log" -- "$RUN_BASE_DIRECTORY/target/release/master" --host 0.0.0.0 --port "$RUN_PORT" run-job --resultsDirectory "$RUN_RESULTS_DIRECTORY" "$JOB_FILE_ABSOLUTE_PATH"
+RUST_LOG="debug" screen -d -m -t "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.log" -- "$RUN_BASE_DIRECTORY/target/release/master" --host 0.0.0.0 --port "$RUN_PORT" run-job --resultsDirectory "$RUN_RESULTS_DIRECTORY" "$JOB_FILE_ABSOLUTE_PATH"
 
 
 echo "Queueing workers on via srun..."
-screen -d -m -t "cw_$RUN_NAME" -S "cw_$RUN_NAME" -L -Logfile "cw_$RUN_NAME.log" -- srun --job-name="cw_$RUN_NAME" --ntasks="$NUM_WORKERS" --output="cm_$RUN_NAME.workers.log" --time="$TIME_LIMIT_MINUTES" --mem=$MEMORY_LIMIT --cpus-per-task=$NUM_CPU_PER_TASK --threads-per-core=$NUM_THREADS_PER_CORE --constraint=zen3 -- singularity exec --bind "$RUN_BASE_DIRECTORY/blender-projects" --env RUST_LOG="debug" "$HOME/diploma/blender-docker.sif" "$RUN_BASE_DIRECTORY/target/release/worker" --masterServerHost "$RUN_HOST" --masterServerPort "$RUN_PORT" --baseDirectory "$RUN_BASE_DIRECTORY" --blenderBinary /usr/bin/blender
+screen -d -m -t "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "${FORMATTED_CURRENT_DATE_TIME}_cw_$RUN_NAME.log" -- srun --job-name="cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" --ntasks="$NUM_WORKERS" --output="${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.workers.log" --time="$TIME_LIMIT_MINUTES" --mem=$MEMORY_LIMIT --cpus-per-task=$NUM_CPU_PER_TASK --threads-per-core=$NUM_THREADS_PER_CORE --constraint=zen3 -- singularity exec --bind "$RUN_BASE_DIRECTORY/blender-projects" --env RUST_LOG="debug" "$HOME/diploma/blender-docker.sif" "$RUN_BASE_DIRECTORY/target/release/worker" --masterServerHost "$RUN_HOST" --masterServerPort "$RUN_PORT" --baseDirectory "$RUN_BASE_DIRECTORY" --blenderBinary /usr/bin/blender
 
 echo "Queued!"

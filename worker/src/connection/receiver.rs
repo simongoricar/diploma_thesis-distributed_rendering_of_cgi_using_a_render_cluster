@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use futures_util::stream::SplitStream;
 use futures_util::StreamExt;
@@ -31,7 +31,7 @@ pub struct BroadcastSenders {
     queue_frame_remove_request: Arc<Sender<MasterFrameQueueRemoveRequest>>,
 
     /// Receives heartbeat requests.
-    heartbeat_request: Arc<Sender<MasterHeartbeatRequest>>,
+    heartbeat_request: Arc<Sender<(MasterHeartbeatRequest, SystemTime)>>,
 
     job_started_event: Arc<Sender<MasterJobStartedEvent>>,
 
@@ -66,8 +66,9 @@ impl MasterReceiver {
             broadcast::channel::<MasterFrameQueueAddRequest>(RECEIVER_BROADCAST_CHANNEL_SIZE);
         let (queue_frame_remove_request_tx, _) =
             broadcast::channel::<MasterFrameQueueRemoveRequest>(RECEIVER_BROADCAST_CHANNEL_SIZE);
-        let (heartbeat_request_tx, _) =
-            broadcast::channel::<MasterHeartbeatRequest>(RECEIVER_BROADCAST_CHANNEL_SIZE);
+        let (heartbeat_request_tx, _) = broadcast::channel::<(MasterHeartbeatRequest, SystemTime)>(
+            RECEIVER_BROADCAST_CHANNEL_SIZE,
+        );
         let (job_started_event_tx, _) =
             broadcast::channel::<MasterJobStartedEvent>(RECEIVER_BROADCAST_CHANNEL_SIZE);
         let (job_finished_request_tx, _) =
@@ -170,7 +171,8 @@ impl MasterReceiver {
                 }
                 WebSocketMessage::MasterHeartbeatRequest(request) => {
                     debug!("Received message: master heartbeat request.");
-                    let _ = senders.heartbeat_request.send(request);
+                    let time_now = SystemTime::now();
+                    let _ = senders.heartbeat_request.send((request, time_now));
                 }
                 WebSocketMessage::MasterJobStartedEvent(event) => {
                     debug!("Received message: job started event.");
@@ -215,7 +217,7 @@ impl MasterReceiver {
     }
 
     /// Get a `Receiver` for future heartbeat requests from the master server.
-    pub fn heartbeat_request_receiver(&self) -> Receiver<MasterHeartbeatRequest> {
+    pub fn heartbeat_request_receiver(&self) -> Receiver<(MasterHeartbeatRequest, SystemTime)> {
         self.senders.heartbeat_request.subscribe()
     }
 
@@ -279,18 +281,5 @@ impl MasterReceiver {
             timeout,
         )
         .await
-    }
-
-    /// One-shot event method that completes when we either receive a heartbeat request
-    /// or we time out (see `timeout`), whichever is sooner.
-    ///
-    /// If timed out, `Err` is returned.
-    #[allow(dead_code)]
-    pub async fn wait_for_heartbeat_request(
-        &self,
-        timeout: Option<Duration>,
-    ) -> Result<MasterHeartbeatRequest> {
-        self.wait_for_message(self.heartbeat_request_receiver(), timeout)
-            .await
     }
 }

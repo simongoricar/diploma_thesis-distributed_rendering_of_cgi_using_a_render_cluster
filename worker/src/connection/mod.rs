@@ -82,6 +82,7 @@ impl Worker {
             receiver_arc.clone(),
             sender.sender_handle(),
             global_cancellation_token.clone(),
+            tracer.clone(),
         ));
 
         let manager_task_handle = tokio::spawn(Self::manage_incoming_messages(
@@ -190,6 +191,7 @@ impl Worker {
         receiver: Arc<MasterReceiver>,
         sender_handle: SenderHandle,
         cancellation_token: CancellationToken,
+        tracer: WorkerTraceBuilder,
     ) -> Result<()> {
         debug!("Running task loop: responding to heartbeats.");
 
@@ -207,7 +209,7 @@ impl Worker {
                 break;
             }
 
-            match heartbeat_request_result {
+            let (heartbeat_request, request_received_time) = match heartbeat_request_result {
                 Ok(potential_request) => {
                     potential_request.into_diagnostic().wrap_err_with(|| {
                         miette!("Failed to receive heartbeat request through channel.")
@@ -219,6 +221,13 @@ impl Worker {
                     continue;
                 }
             };
+
+            tracer
+                .trace_new_ping(
+                    heartbeat_request.request_time,
+                    request_received_time,
+                )
+                .await;
 
             debug!("Master server sent heartbeat request, responding.");
 

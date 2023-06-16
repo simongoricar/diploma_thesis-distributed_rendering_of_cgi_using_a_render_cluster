@@ -35,6 +35,9 @@ use crate::connection::receiver::WorkerReceiver;
 use crate::connection::requester::WorkerRequester;
 use crate::connection::sender::WorkerSender;
 
+const HEARTBEAT_TASK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
 /// State of the WebSocket connection with the worker.
 pub enum WorkerConnectionState {
     PendingHandshake,
@@ -394,7 +397,7 @@ impl Worker {
         let mut last_heartbeat_time = Instant::now();
 
         loop {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(HEARTBEAT_TASK_CHECK_INTERVAL).await;
 
             if heartbeat_cancellation_token.is_cancelled() {
                 logger.trace("Stopping heartbeat task (heartbeat cancelled).");
@@ -405,10 +408,10 @@ impl Worker {
                 break;
             }
 
-            if last_heartbeat_time.elapsed() > Duration::from_secs(10) {
+            if last_heartbeat_time.elapsed() > HEARTBEAT_INTERVAL {
                 logger.trace("Sending heartbeat request to worker.");
                 sender_handle
-                    .send_message(MasterHeartbeatRequest::new())
+                    .send_message(MasterHeartbeatRequest::new_now())
                     .await?;
 
                 let time_heartbeat_start = Instant::now();

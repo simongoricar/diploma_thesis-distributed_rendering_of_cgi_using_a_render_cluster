@@ -46,7 +46,7 @@ pub struct WorkerPerformance {
 impl WorkerPerformance {
     pub fn from_worker_trace(trace: &WorkerTrace) -> Result<Self> {
         // Extract frame queue statistics.
-        let total_frames_rendered = trace.frame_render_times.len();
+        let total_frames_rendered = trace.frame_render_traces.len();
         let total_frames_queued = trace.total_queued_frames;
         let total_frames_stolen_from_queue = trace.total_queued_frames_removed_from_queue;
 
@@ -60,15 +60,15 @@ impl WorkerPerformance {
         let mut total_rendering_time = Duration::new(0, 0);
         let mut total_idle_time = Duration::new(0, 0);
 
-        let total_frames = trace.frame_render_times.len();
+        let total_frames = trace.frame_render_traces.len();
 
         for frame_index in 0..total_frames {
-            let current_frame = trace.frame_render_times[frame_index];
+            let current_frame = trace.frame_render_traces[frame_index];
 
             // Calculate idle time from beginning of job or previous frame.
             if frame_index > 0 {
                 // First frame
-                let previous_frame = trace.frame_render_times[frame_index - 1];
+                let previous_frame = trace.frame_render_traces[frame_index - 1];
 
                 let idle_time_between_frames = current_frame
                     .frame_start_time

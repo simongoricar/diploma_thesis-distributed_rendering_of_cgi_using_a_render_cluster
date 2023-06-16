@@ -1,18 +1,27 @@
+use std::time::SystemTime;
+
 use miette::{miette, Report};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
+use serde_with::TimestampSecondsWithFrac;
 
 use crate::messages::traits::Message;
 use crate::messages::WebSocketMessage;
 
 pub static MASTER_HEARTBEAT_REQUEST_TYPE_NAME: &str = "request_heartbeat";
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct MasterHeartbeatRequest {}
+pub struct MasterHeartbeatRequest {
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub request_time: SystemTime,
+}
 
 impl MasterHeartbeatRequest {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self {}
+    pub fn new_now() -> Self {
+        Self {
+            request_time: SystemTime::now(),
+        }
     }
 }
 

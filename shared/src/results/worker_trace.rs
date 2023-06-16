@@ -30,6 +30,26 @@ impl WorkerFrameTrace {
 }
 
 #[serde_as]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
+pub struct WorkerPingTrace {
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub pinged_at: SystemTime,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub received_at: SystemTime,
+}
+
+impl WorkerPingTrace {
+    pub fn new(pinged_at: SystemTime, received_at: SystemTime) -> Self {
+        Self {
+            pinged_at,
+            received_at,
+        }
+    }
+}
+
+
+#[serde_as]
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct WorkerTrace {
     /// Amount of frames added to the worker's queue by the master server.
@@ -38,14 +58,18 @@ pub struct WorkerTrace {
     /// Amount of frames removed from worker's queue by the master server.
     pub total_queued_frames_removed_from_queue: usize,
 
+    /// Job start time as perceived by the worker.
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
     pub job_start_time: SystemTime,
 
+    /// Job finish time as perceived by the worker.
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
     pub job_finish_time: SystemTime,
 
     /// Information about all rendered frames (in the order they were rendered).
-    pub frame_render_times: Vec<WorkerFrameTrace>,
+    pub frame_render_traces: Vec<WorkerFrameTrace>,
+
+    pub ping_traces: Vec<WorkerPingTrace>,
 }
 
 
@@ -62,7 +86,9 @@ struct WorkerTraceIncomplete {
     pub job_finish_time: Option<SystemTime>,
 
     /// Information about all rendered frames (in the order they were rendered).
-    pub frame_render_times: Vec<WorkerFrameTrace>,
+    pub frame_render_traces: Vec<WorkerFrameTrace>,
+
+    pub ping_traces: Vec<WorkerPingTrace>,
 }
 
 #[derive(Clone)]
@@ -75,7 +101,8 @@ impl WorkerTraceBuilder {
             total_queued_frames_removed_from_queue: 0,
             job_start_time: None,
             job_finish_time: None,
-            frame_render_times: Vec::new(),
+            frame_render_traces: Vec::new(),
+            ping_traces: Vec::new(),
         })))
     }
 
@@ -91,7 +118,8 @@ impl WorkerTraceBuilder {
             job_finish_time: trace
                 .job_finish_time
                 .ok_or_else(|| miette!("Missing job finish time, can't build."))?,
-            frame_render_times: trace.frame_render_times.clone(),
+            frame_render_traces: trace.frame_render_traces.clone(),
+            ping_traces: trace.ping_traces.clone(),
         })
     }
 
@@ -124,10 +152,19 @@ impl WorkerTraceBuilder {
     ) {
         let mut trace = self.0.lock().await;
 
-        trace.frame_render_times.push(WorkerFrameTrace::new(
+        trace.frame_render_traces.push(WorkerFrameTrace::new(
             frame_index,
             start_time,
             finish_time,
         ));
+    }
+
+    // TODO integrate
+    pub async fn trace_new_ping(&self, pinged_at: SystemTime, received_at: SystemTime) {
+        let mut trace = self.0.lock().await;
+
+        trace
+            .ping_traces
+            .push(WorkerPingTrace::new(pinged_at, received_at));
     }
 }

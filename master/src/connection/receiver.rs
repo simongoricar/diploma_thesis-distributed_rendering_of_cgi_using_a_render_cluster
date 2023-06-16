@@ -24,6 +24,11 @@ use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::WebSocketStream;
 
+const NEXT_MESSAGE_TASK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const RECEIVER_BROADCAST_CHANNEL_SIZE: usize = 512;
+const DEFAULT_MESSAGE_WAIT_DURATION: Duration = Duration::from_secs(10);
+
+
 #[derive(Clone)]
 struct BroadcastSenders {
     handshake_response: Arc<Sender<WorkerHandshakeResponse>>,
@@ -52,7 +57,6 @@ pub struct WorkerReceiver {
     task_join_handle: JoinHandle<Result<()>>,
 }
 
-static RECEIVER_BROADCAST_CHANNEL_SIZE: usize = 512;
 
 impl WorkerReceiver {
     /// Initialize a new `WorkerEventDispatcher`, consuming the WebSocket connection's async receiver channel.
@@ -122,8 +126,11 @@ impl WorkerReceiver {
         info!("WorkerReceiver: Running WebSocket stream reading and broadcasting loop.");
 
         loop {
-            let next_message_result =
-                tokio::time::timeout(Duration::from_secs(2), websocket_stream.next()).await;
+            let next_message_result = tokio::time::timeout(
+                NEXT_MESSAGE_TASK_CHECK_INTERVAL,
+                websocket_stream.next(),
+            )
+            .await;
 
             if global_cancellation_token.is_cancelled() {
                 trace!("WorkerReceiver: Stopping (cluster stopping).");
@@ -243,7 +250,7 @@ impl WorkerReceiver {
         mut receiver: Receiver<R>,
         timeout: Option<Duration>,
     ) -> Result<R> {
-        let timeout = timeout.unwrap_or(Duration::from_secs(5));
+        let timeout = timeout.unwrap_or(DEFAULT_MESSAGE_WAIT_DURATION);
 
         let receiver_future = async {
             receiver.recv().await.into_diagnostic().wrap_err_with(|| {
@@ -273,7 +280,7 @@ impl WorkerReceiver {
         timeout: Option<Duration>,
         predicate: F,
     ) -> Result<R> {
-        let timeout = timeout.unwrap_or(Duration::from_secs(5));
+        let timeout = timeout.unwrap_or(DEFAULT_MESSAGE_WAIT_DURATION);
 
         // Keeps receiving given messages until the predicate matches.
         let predicated_receiver_future = async {

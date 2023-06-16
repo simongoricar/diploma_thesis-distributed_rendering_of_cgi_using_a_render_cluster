@@ -53,6 +53,7 @@ fn save_raw_traces(
         .iter()
         .map(|(address, trace)| {
             (
+                // TODO Add hostname prefix (or maybe a worker ID?)
                 format!("{}:{}", address.ip(), address.port()),
                 trace.clone(),
             )

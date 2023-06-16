@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use miette::{miette, Context, Result};
 use shared::jobs::BlenderJob;
@@ -89,7 +90,7 @@ impl WorkerRequester {
             .event_dispatcher
             .wait_for_message_with_predicate(
                 self.event_dispatcher.job_finished_response_receiver(),
-                None,
+                Some(Duration::from_secs(20)),
                 |response| response.message_request_context_id == request_id,
             )
             .await

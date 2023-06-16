@@ -31,6 +31,8 @@ use crate::connection::sender::MasterSender;
 use crate::rendering::queue::WorkerAutomaticQueue;
 use crate::rendering::runner::BlenderJobRunner;
 
+const TRACE_EVERY_NTH_PING: usize = 4;
+
 /// Worker instance. Manages the connection with the master server, receives requests
 /// and performs the rendering as instructed.
 pub struct Worker {}
@@ -196,6 +198,7 @@ impl Worker {
         debug!("Running task loop: responding to heartbeats.");
 
         let mut heartbeat_request_receiver = receiver.heartbeat_request_receiver();
+        let mut pings_since_traced: usize = 0;
 
         loop {
             let heartbeat_request_result = tokio::time::timeout(
@@ -222,12 +225,17 @@ impl Worker {
                 }
             };
 
-            tracer
-                .trace_new_ping(
-                    heartbeat_request.request_time,
-                    request_received_time,
-                )
-                .await;
+            pings_since_traced += 1;
+            if pings_since_traced >= TRACE_EVERY_NTH_PING {
+                tracer
+                    .trace_new_ping(
+                        heartbeat_request.request_time,
+                        request_received_time,
+                    )
+                    .await;
+
+                pings_since_traced = 0;
+            }
 
             debug!("Master server sent heartbeat request, responding.");
 

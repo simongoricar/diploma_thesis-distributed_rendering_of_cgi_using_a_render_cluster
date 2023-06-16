@@ -335,7 +335,7 @@ impl WorkerReceiver {
     }
 
     /// One-shot event method that completes when either some worker's queue item has been finished
-    /// or when the `timeout` is reached, whichever is sooner. The default timeout is 5 seconds.
+    /// or when the `timeout` is reached, whichever is sooner. The default timeout is 10 seconds.
     ///
     /// If timed out, `Err` is returned.
     pub async fn wait_for_queue_item_finished(
@@ -350,7 +350,7 @@ impl WorkerReceiver {
     }
 
     /// One-shot event method that completes when the worker sends the next heartbeat response
-    /// or when the `timeout` is reached, whichever is sooner. The default timeout is 5 seconds.
+    /// or when the `timeout` is reached, whichever is sooner. The default timeout is 10 seconds.
     ///
     /// If timed out, `Err` is returned.
     pub async fn wait_for_heartbeat_response(

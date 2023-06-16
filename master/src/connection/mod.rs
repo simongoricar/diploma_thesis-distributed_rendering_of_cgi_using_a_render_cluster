@@ -35,8 +35,8 @@ use crate::connection::receiver::WorkerReceiver;
 use crate::connection::requester::WorkerRequester;
 use crate::connection::sender::WorkerSender;
 
-const HEARTBEAT_TASK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const HEARTBEAT_TASK_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
 /// State of the WebSocket connection with the worker.
 pub enum WorkerConnectionState {

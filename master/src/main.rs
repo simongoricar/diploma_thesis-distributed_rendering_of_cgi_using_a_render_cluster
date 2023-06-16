@@ -16,7 +16,8 @@ use log::info;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::Serialize;
 use shared::jobs::BlenderJob;
-use shared::results::performance::{MasterPerformance, WorkerPerformance};
+use shared::results::master_trace::MasterTrace;
+use shared::results::performance::WorkerPerformance;
 use shared::results::worker_trace::WorkerTrace;
 
 use crate::cli::{CLIArgs, CLICommand};
@@ -40,6 +41,7 @@ fn parse_worker_traces(
 
 #[derive(Serialize)]
 struct RawTraceWrapper {
+    pub master_trace: MasterTrace,
     pub worker_traces: HashMap<String, WorkerTrace>,
 }
 
@@ -47,6 +49,7 @@ fn save_raw_traces(
     start_time: &DateTime<Local>,
     job: &BlenderJob,
     output_directory: &Path,
+    master_trace: &MasterTrace,
     worker_traces: &[(SocketAddr, WorkerTrace)],
 ) -> Result<()> {
     let traces_hash_map = worker_traces
@@ -61,6 +64,7 @@ fn save_raw_traces(
         .collect();
 
     let wrapped_raw_traces = RawTraceWrapper {
+        master_trace: master_trace.clone(),
         worker_traces: traces_hash_map,
     };
 
@@ -97,7 +101,6 @@ fn save_raw_traces(
 
 #[derive(Serialize)]
 struct ProcessedResultsWrapper {
-    pub master_performance: MasterPerformance,
     pub worker_performance: HashMap<String, WorkerPerformance>,
 }
 
@@ -105,7 +108,6 @@ fn save_processed_results(
     start_time: &DateTime<Local>,
     job: &BlenderJob,
     output_directory: &Path,
-    master_performance: &MasterPerformance,
     worker_performance: &Vec<(SocketAddr, WorkerPerformance)>,
 ) -> Result<()> {
     let worker_perf_map: HashMap<String, WorkerPerformance> = worker_performance
@@ -119,7 +121,6 @@ fn save_processed_results(
         .collect();
 
     let wrapped_results = ProcessedResultsWrapper {
-        master_performance: master_performance.clone(),
         worker_performance: worker_perf_map,
     };
 
@@ -154,9 +155,9 @@ fn save_processed_results(
 }
 
 fn print_results(
-    master_performance: &MasterPerformance,
+    master_performance: &MasterTrace,
     worker_performance: &Vec<(SocketAddr, WorkerPerformance)>,
-) {
+) -> Result<()> {
     /*
      * Individual worker statistics
      */
@@ -247,8 +248,14 @@ fn print_results(
 
     println!(
         "Total job duration = {:.6} seconds.",
-        master_performance.total_time.as_secs_f64()
-    )
+        master_performance
+            .job_finish_time
+            .duration_since(master_performance.job_start_time)
+            .into_diagnostic()?
+            .as_secs_f64()
+    );
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -272,7 +279,7 @@ async fn main() -> Result<()> {
 
         info!("Initializing server and running until job is complete.");
 
-        let (master_performance, worker_traces) = ClusterManager::initialize_server_and_run_job(
+        let (master_trace, worker_traces) = ClusterManager::initialize_server_and_run_job(
             &args.bind_to_host,
             args.bind_to_port,
             job.clone(),
@@ -292,22 +299,22 @@ async fn main() -> Result<()> {
             &start_time,
             &job,
             &run_job_args.results_directory_path,
+            &master_trace,
             &worker_traces,
         )?;
 
         info!("Processing traces.");
-        let worker_performance = parse_worker_traces(worker_traces)?;
+        let worker_performances = parse_worker_traces(worker_traces)?;
 
         info!("Saving processed results.");
         save_processed_results(
             &start_time,
             &job,
             &run_job_args.results_directory_path,
-            &master_performance,
-            &worker_performance,
+            &worker_performances,
         )?;
 
-        print_results(&master_performance, &worker_performance);
+        print_results(&master_trace, &worker_performances)?;
     }
 
     Ok(())

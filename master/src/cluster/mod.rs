@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use log::{error, info, trace};
 use miette::Result;
@@ -8,10 +8,9 @@ use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
 use shared::jobs::{BlenderJob, DistributionStrategy};
 use shared::messages::job::MasterJobStartedEvent;
-use shared::results::performance::MasterPerformance;
+use shared::results::master_trace::MasterTrace;
 use shared::results::worker_trace::WorkerTrace;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::Instant;
 
 use crate::cluster::state::ClusterManagerState;
 use crate::cluster::strategies::{
@@ -32,7 +31,7 @@ impl ClusterManager {
         host: &str,
         port: usize,
         job: BlenderJob,
-    ) -> Result<(MasterPerformance, Vec<(SocketAddr, WorkerTrace)>)> {
+    ) -> Result<(MasterTrace, Vec<(SocketAddr, WorkerTrace)>)> {
         let shared_state = Arc::new(ClusterManagerState::new_from_job(job.clone()));
         let cancellation_token = CancellationToken::new();
 
@@ -52,7 +51,7 @@ impl ClusterManager {
 
         // Spawn the acceptor in the background and wait for the job runner to complete first.
         let worker_connection_acceptor_handle = tokio::spawn(worker_connection_acceptor_future);
-        let master_performance = job_processing_future.await?;
+        let master_trace = job_processing_future.await?;
 
         // Request performance traces from workers. Shortly after the workers respond with those,
         // they will shut themselves down.
@@ -88,7 +87,7 @@ impl ClusterManager {
             .await
             .into_diagnostic()??;
 
-        Ok((master_performance, worker_traces))
+        Ok((master_trace, worker_traces))
     }
 
     async fn indefinitely_accept_connections(
@@ -165,7 +164,7 @@ impl ClusterManager {
     async fn wait_for_workers_and_run_job(
         job: BlenderJob,
         state: Arc<ClusterManagerState>,
-    ) -> Result<MasterPerformance> {
+    ) -> Result<MasterTrace> {
         /*
          * Wait for `job.wait_for_number_of_workers` workers to connect.
          */
@@ -196,7 +195,7 @@ impl ClusterManager {
         /*
          * Send job starting events to all connected workers.
          */
-        let time_job_start = Instant::now();
+        let systime_job_start = SystemTime::now();
 
         {
             let workers_locked = &state.workers.lock().await;
@@ -271,8 +270,9 @@ impl ClusterManager {
 
         info!("All frames have been finished!");
 
-        let total_job_duration = time_job_start.elapsed();
-        let performance = MasterPerformance::new(total_job_duration);
+        let systime_job_finish = SystemTime::now();
+
+        let performance = MasterTrace::new(systime_job_start, systime_job_finish);
 
         Ok(performance)
     }

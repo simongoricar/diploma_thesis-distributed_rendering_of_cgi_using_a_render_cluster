@@ -9,20 +9,6 @@ use crate::results::worker_trace::WorkerTrace;
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct MasterPerformance {
-    #[serde_as(as = "DurationSecondsWithFrac<f64>")]
-    pub total_time: Duration,
-}
-
-impl MasterPerformance {
-    pub fn new(total_time: Duration) -> Self {
-        Self { total_time }
-    }
-}
-
-
-#[serde_as]
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct WorkerPerformance {
     pub total_frames_rendered: usize,
 

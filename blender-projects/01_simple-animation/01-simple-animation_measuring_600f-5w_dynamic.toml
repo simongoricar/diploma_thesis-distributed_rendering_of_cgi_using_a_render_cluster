@@ -8,7 +8,7 @@ frame_range_to = 600
 
 wait_for_number_of_workers = 5
 
-output_directory_path = "%BASE%/blender-projects/01_simple-animation/output"
+output_directory_path = "%BASE%/blender-projects/01_simple-animation/output_600f5w_dynamic"
 output_file_name_format = "#####"
 output_file_format = "JPEG"
 

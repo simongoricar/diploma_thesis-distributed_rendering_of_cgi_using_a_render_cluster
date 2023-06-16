@@ -1,0 +1,17 @@
+job_name = "01_simple-animation_measuring_600f-1w_naive-coarse"
+job_description = "Simple but long animation (600 frames, 1w, naive coarse)."
+
+project_file_path = "%BASE%/blender-projects/01_simple-animation/01_simple-animation.blend"
+
+frame_range_from = 1
+frame_range_to = 600
+
+wait_for_number_of_workers = 1
+
+output_directory_path = "%BASE%/blender-projects/01_simple-animation/output_600f1w"
+output_file_name_format = "#####"
+output_file_format = "JPEG"
+
+[frame_distribution_strategy]
+strategy_type = "naive-coarse"
+target_queue_size = 600

@@ -50,9 +50,13 @@ pub struct BlenderJob {
     /// Short description of the job, if provided.
     pub job_description: Option<String>,
 
-    /// Path to the `.blend` project file (must be accessible to workers,
-    /// but can use the %BASE% placeholder).
+    /// Path to the `.blend` project file
+    /// (must be accessible to workers, can use the %BASE% placeholder).
     pub project_file_path: String,
+
+    /// Path to the `.py` rendering and timing script file
+    /// (must be accessible to workers, can use the %BASE% placeholder).
+    pub render_script_path: String,
 
     /// Frame start bound (inclusive).
     pub frame_range_from: usize,

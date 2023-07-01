@@ -1,0 +1,17 @@
+job_name = "04_very-simple_measuring_7200f-1w_naive-coarse"
+job_description = "Incredibly simple animation. 7200 frames, 1 worker, naive coarse strategy."
+
+project_file_path = "%BASE%/blender-projects/04_very-simple/04_very-simple.blend"
+
+frame_range_from = 1
+frame_range_to = 7200
+
+wait_for_number_of_workers = 1
+
+output_directory_path = "%BASE%/blender-projects/04_very-simple/output_7200f_1w_naive-coarse"
+output_file_name_format = "#####"
+output_file_format = "JPEG"
+
+[frame_distribution_strategy]
+strategy_type = "naive-coarse"
+target_queue_size = 7200

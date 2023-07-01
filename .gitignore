@@ -26,3 +26,4 @@ blender-projects/**/results
 blender-projects/**/*.png
 blender-projects/**/*.jpg
 blender-projects/**/*.jpeg
+__pycache__

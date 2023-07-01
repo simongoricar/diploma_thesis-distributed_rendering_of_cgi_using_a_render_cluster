@@ -1,30 +1,62 @@
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use miette::{miette, Result};
+use chrono::{DateTime, Utc};
+use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use serde_with::TimestampSecondsWithFrac;
 use tokio::sync::Mutex;
 
 #[serde_as]
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
+pub struct FrameRenderTime {
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub started_process_at: DateTime<Utc>,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub finished_loading_at: DateTime<Utc>,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub started_rendering_at: DateTime<Utc>,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub finished_rendering_at: DateTime<Utc>,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub file_saving_started_at: DateTime<Utc>,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub file_saving_finished_at: DateTime<Utc>,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub exited_process_at: DateTime<Utc>,
+}
+
+impl FrameRenderTime {
+    pub fn total_execution_time(&self) -> Result<Duration> {
+        self.exited_process_at
+            .signed_duration_since(self.started_process_at)
+            .to_std()
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Total execution time is negative?!"))
+    }
+}
+
+
+#[serde_as]
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub struct WorkerFrameTrace {
     pub frame_index: usize,
 
-    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
-    pub frame_start_time: SystemTime,
-
-    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
-    pub frame_finish_time: SystemTime,
+    pub details: FrameRenderTime,
 }
 
 impl WorkerFrameTrace {
-    pub fn new(frame_index: usize, start_time: SystemTime, finish_time: SystemTime) -> Self {
+    pub fn new(frame_index: usize, frame_render_time: FrameRenderTime) -> Self {
         Self {
             frame_index,
-            frame_start_time: start_time,
-            frame_finish_time: finish_time,
+            details: frame_render_time,
         }
     }
 }
@@ -60,11 +92,11 @@ pub struct WorkerTrace {
 
     /// Job start time as perceived by the worker.
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
-    pub job_start_time: SystemTime,
+    pub job_start_time: DateTime<Utc>,
 
     /// Job finish time as perceived by the worker.
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
-    pub job_finish_time: SystemTime,
+    pub job_finish_time: DateTime<Utc>,
 
     /// Information about all rendered frames (in the order they were rendered).
     pub frame_render_traces: Vec<WorkerFrameTrace>,
@@ -81,9 +113,9 @@ struct WorkerTraceIncomplete {
     /// Amount of frames removed from worker's queue by the master server.
     pub total_queued_frames_removed_from_queue: usize,
 
-    pub job_start_time: Option<SystemTime>,
+    pub job_start_time: Option<DateTime<Utc>>,
 
-    pub job_finish_time: Option<SystemTime>,
+    pub job_finish_time: Option<DateTime<Utc>>,
 
     /// Information about all rendered frames (in the order they were rendered).
     pub frame_render_traces: Vec<WorkerFrameTrace>,
@@ -134,12 +166,12 @@ impl WorkerTraceBuilder {
         trace.total_queued_frames_removed_from_queue += 1;
     }
 
-    pub async fn set_job_start_time(&self, start_time: SystemTime) {
+    pub async fn set_job_start_time(&self, start_time: DateTime<Utc>) {
         let mut trace = self.0.lock().await;
         trace.job_start_time = Some(start_time);
     }
 
-    pub async fn set_job_finish_time(&self, finish_time: SystemTime) {
+    pub async fn set_job_finish_time(&self, finish_time: DateTime<Utc>) {
         let mut trace = self.0.lock().await;
         trace.job_finish_time = Some(finish_time);
     }
@@ -147,15 +179,13 @@ impl WorkerTraceBuilder {
     pub async fn trace_new_rendered_frame(
         &self,
         frame_index: usize,
-        start_time: SystemTime,
-        finish_time: SystemTime,
+        frame_render_time: FrameRenderTime,
     ) {
         let mut trace = self.0.lock().await;
 
         trace.frame_render_traces.push(WorkerFrameTrace::new(
             frame_index,
-            start_time,
-            finish_time,
+            frame_render_time,
         ));
     }
 

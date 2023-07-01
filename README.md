@@ -14,7 +14,7 @@ singularity exec --bind /ceph/grid/home/sg7710/diploma/distributed-rendering-dip
 
 # 1. Running performance tests on IJS' NSC
 
-## 1.1 `01 Simple bobbing animation, 600 frames on 10 workers`
+## 1.1 `01 Simple bobbing animation, 600 frames on 20 workers`
 
 
 ### *Strategy: naive, fine*

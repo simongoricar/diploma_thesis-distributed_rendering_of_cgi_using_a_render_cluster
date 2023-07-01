@@ -2,8 +2,9 @@ pub mod receiver;
 pub mod sender;
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use chrono::Utc;
 use futures_util::StreamExt;
 use log::{debug, info, trace, warn};
 use miette::{miette, Context, IntoDiagnostic, Result};
@@ -326,13 +327,13 @@ impl Worker {
                     let _: MasterJobStartedEvent = job_started_event.into_diagnostic()?;
 
                     info!("Master server signalled job start.");
-                    tracer.set_job_start_time(SystemTime::now()).await;
+                    tracer.set_job_start_time(Utc::now()).await;
                 },
                 job_finished_request = job_finished_request_receiver.recv() => {
                     let request: MasterJobFinishedRequest = job_finished_request.into_diagnostic()?;
 
                     info!("Master server signalled job finish - sending trace and stopping.");
-                    tracer.set_job_finish_time(SystemTime::now()).await;
+                    tracer.set_job_finish_time(Utc::now()).await;
 
                     let trace = tracer
                         .build()

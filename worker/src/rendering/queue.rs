@@ -159,7 +159,7 @@ impl WorkerAutomaticQueue {
                 }
             }
             Err(error) => {
-                error!("Errored while rendering frame: {}", error);
+                error!("Errored while rendering frame: {:?}", error);
             }
         }
 

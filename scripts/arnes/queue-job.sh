@@ -93,11 +93,11 @@ mkdir -p logs
 
 
 echo "Starting master on login instance..."
-RUST_LOG="debug" screen -d -m -t "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.log" -- "$RUN_BASE_DIRECTORY/target/release/master" --host 0.0.0.0 --port "$RUN_PORT" run-job --resultsDirectory "$REAL_RUN_RESULTS_DIRECTORY" "$JOB_FILE_ABSOLUTE_PATH"
+RUST_LOG="debug" screen -d -m -t "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.log" -- "$RUN_BASE_DIRECTORY/target/release/master" --host "0.0.0.0" --port "$RUN_PORT" run-job --resultsDirectory "$REAL_RUN_RESULTS_DIRECTORY" "$JOB_FILE_ABSOLUTE_PATH"
 
 
 echo "Queueing workers on via srun..."
-screen -d -m -t "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cw_$RUN_NAME.log" -- srun --exclusive --job-name="cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" --ntasks="$NUM_WORKERS" --output="$RUN_BASE_DIRECTORY/logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.workers.log" --time="$TIME_LIMIT_MINUTES" --mem=$MEMORY_LIMIT --cpus-per-task=$NUM_CPU_PER_TASK --threads-per-core=$NUM_THREADS_PER_CORE --constraint=zen3 -- singularity exec --bind "$RUN_BASE_DIRECTORY/blender-projects" --env RUST_LOG="debug" "$HOME/diploma/distributed-rendering-diploma/blender-3.6.0.sif" "$RUN_BASE_DIRECTORY/target/release/worker" --masterServerHost "$RUN_HOST" --masterServerPort "$RUN_PORT" --baseDirectory "$RUN_BASE_DIRECTORY" --blenderBinary /usr/bin/blender
+screen -d -m -t "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cw_$RUN_NAME.log" -- srun --exclusive --job-name="cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" --ntasks="$NUM_WORKERS" --output="$RUN_BASE_DIRECTORY/logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.workers.log" --time="$TIME_LIMIT_MINUTES" --mem=$MEMORY_LIMIT --cpus-per-task=$NUM_CPU_PER_TASK --threads-per-core=$NUM_THREADS_PER_CORE --constraint="amd&rome" --dependency="singleton" --exclude="wn[201-224]" -- singularity exec --bind "$RUN_BASE_DIRECTORY/blender-projects" --env RUST_LOG="debug" "$HOME/diploma/distributed-rendering-diploma/blender-3.6.0.sif" "$RUN_BASE_DIRECTORY/target/release/worker" --masterServerHost "$RUN_HOST" --masterServerPort "$RUN_PORT" --baseDirectory "$RUN_BASE_DIRECTORY" --blenderBinary /usr/bin/blender
 
 echo "Queued!"
 

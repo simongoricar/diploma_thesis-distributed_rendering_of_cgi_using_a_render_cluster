@@ -90,7 +90,7 @@ impl WorkerRequester {
             .event_dispatcher
             .wait_for_message_with_predicate(
                 self.event_dispatcher.job_finished_response_receiver(),
-                Some(Duration::from_secs(20)),
+                Some(Duration::from_secs(600)),
                 |response| response.message_request_context_id == request_id,
             )
             .await

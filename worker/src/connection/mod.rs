@@ -24,15 +24,16 @@ use shared::messages::queue::{
 };
 use shared::messages::SenderHandle;
 use shared::results::worker_trace::WorkerTraceBuilder;
+use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
 use tokio::net::TcpStream;
-use tokio_tungstenite::client_async;
+use tokio_tungstenite::client_async_with_config;
 
 use crate::connection::receiver::MasterReceiver;
 use crate::connection::sender::MasterSender;
 use crate::rendering::queue::WorkerAutomaticQueue;
 use crate::rendering::runner::BlenderJobRunner;
 
-const TRACE_EVERY_NTH_PING: usize = 4;
+const TRACE_EVERY_NTH_PING: usize = 8;
 
 /// Worker instance. Manages the connection with the master server, receives requests
 /// and performs the rendering as instructed.
@@ -58,9 +59,10 @@ impl Worker {
         .await
         .wrap_err_with(|| miette!("Could not connect to master server."))?;
 
-        let (stream, _) = client_async(
+        let (stream, _) = client_async_with_config(
             format!("ws://{}", master_server_url),
             tcp_connection,
+            Some(DEFAULT_WEBSOCKET_CONFIG),
         )
         .await
         .into_diagnostic()?;

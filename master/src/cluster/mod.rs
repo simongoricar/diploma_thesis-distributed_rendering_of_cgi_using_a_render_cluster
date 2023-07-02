@@ -236,7 +236,7 @@ impl ClusterManager {
                         miette!("Failed to complete naive fine distribution strategy.")
                     })
             }
-            DistributionStrategy::NaiveCoarse { target_queue_size } => {
+            DistributionStrategy::EagerNaiveCoarse { target_queue_size } => {
                 info!(
                     "Running job with strategy: naive coarse (target_queue_size={})",
                     target_queue_size

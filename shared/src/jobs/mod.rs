@@ -35,8 +35,8 @@ pub enum DistributionStrategy {
     #[serde(rename = "naive-fine")]
     NaiveFine,
 
-    #[serde(rename = "naive-coarse")]
-    NaiveCoarse { target_queue_size: usize },
+    #[serde(rename = "eager-naive-coarse")]
+    EagerNaiveCoarse { target_queue_size: usize },
 
     #[serde(rename = "dynamic")]
     Dynamic(DynamicStrategyOptions),

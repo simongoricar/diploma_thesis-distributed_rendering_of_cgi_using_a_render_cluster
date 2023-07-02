@@ -76,7 +76,7 @@ fn save_raw_traces(
     let raw_traces_file_name = format!(
         "{}_job-{}_raw-trace.json",
         start_time.format("%Y-%m-%d_%H-%M-%S"),
-        job.job_name.replace(" ", "_"),
+        job.job_name.replace(' ', "_"),
     );
     let raw_traces_full_path = output_directory.join(raw_traces_file_name);
 
@@ -108,7 +108,7 @@ fn save_processed_results(
     start_time: &DateTime<Local>,
     job: &BlenderJob,
     output_directory: &Path,
-    worker_performance: &Vec<(SocketAddr, WorkerPerformance)>,
+    worker_performance: &[(SocketAddr, WorkerPerformance)],
 ) -> Result<()> {
     let worker_perf_map: HashMap<String, WorkerPerformance> = worker_performance
         .iter()
@@ -132,7 +132,7 @@ fn save_processed_results(
     let processed_results_file_name = format!(
         "{}_job-{}_processed-results.json",
         start_time.format("%Y-%m-%d_%H-%M-%S"),
-        job.job_name.replace(" ", "_"),
+        job.job_name.replace(' ', "_"),
     );
     let processed_results_full_path = output_directory.join(processed_results_file_name);
 
@@ -165,48 +165,62 @@ fn print_results(
     println!("Worker performance results:");
     println!();
 
-    let mut cumulative_rendering_time = Duration::new(0, 0);
-    let mut cumulative_idle_time = Duration::new(0, 0);
-
-    let mut cumulative_frames_queued: usize = 0;
     let mut cumulative_frames_rendered: usize = 0;
+    let mut cumulative_frames_queued: usize = 0;
     let mut cumulative_frames_stolen: usize = 0;
 
+    let mut cumulative_blend_file_reading_time = Duration::new(0, 0);
+    let mut cumulative_rendering_time = Duration::new(0, 0);
+    let mut cumulative_image_saving_time = Duration::new(0, 0);
+    let mut cumulative_idle_time = Duration::new(0, 0);
+
+
     for (address, performance) in worker_performance {
+        cumulative_frames_rendered += performance.total_frames_rendered;
+        cumulative_frames_queued += performance.total_frames_queued;
+        cumulative_frames_stolen += performance.total_frames_stolen_from_queue;
+
+        cumulative_blend_file_reading_time += performance.total_blend_file_reading_time;
         cumulative_rendering_time += performance.total_rendering_time;
+        cumulative_image_saving_time += performance.total_image_saving_time;
         cumulative_idle_time += performance.total_idle_time;
 
-        cumulative_frames_queued += performance.total_frames_queued;
-        cumulative_frames_rendered += performance.total_frames_rendered;
-        cumulative_frames_stolen += performance.total_frames_stolen_from_queue;
 
 
         println!("[Worker {}:{}]", address.ip(), address.port());
 
         println!(
-            "Worker on-job time = {:.6} seconds.",
-            performance.total_time.as_secs_f64()
-        );
-        println!(
-            "Worker rendering time = {:.6} seconds.",
-            performance.total_rendering_time.as_secs_f64()
-        );
-        println!(
-            "Worker idle time = {:.6} seconds.",
-            performance.total_idle_time.as_secs_f64()
-        );
-
-        println!(
-            "Worker queued frames = {}",
+            "Total queued frames = {}",
             performance.total_frames_queued
         );
         println!(
-            "Worker frames rendered = {}",
+            "Total frames rendered = {}",
             performance.total_frames_rendered
         );
         println!(
-            "Worker frames stolen from its queue before rendered = {}",
+            "Total frames stolen from worker's queue = {}",
             performance.total_frames_stolen_from_queue
+        );
+
+        println!(
+            "On-job time = {:.6} seconds.",
+            performance.total_time.as_secs_f64()
+        );
+        println!(
+            ".blend file reading time = {:.6} seconds.",
+            performance.total_blend_file_reading_time.as_secs_f64()
+        );
+        println!(
+            "Rendering time = {:.6} seconds.",
+            performance.total_rendering_time.as_secs_f64()
+        );
+        println!(
+            "Image saving time = {:.6} seconds.",
+            performance.total_image_saving_time.as_secs_f64()
+        );
+        println!(
+            "Idle time = {:.6} seconds.",
+            performance.total_idle_time.as_secs_f64()
         );
 
         println!();
@@ -218,25 +232,33 @@ fn print_results(
     println!("[Cumulative]");
 
     println!(
-        "Cumulative rendering time = {:.6} seconds.",
-        cumulative_rendering_time.as_secs_f64()
-    );
-    println!(
-        "Cumulative idle time = {:.6} seconds.",
-        cumulative_idle_time.as_secs_f64()
-    );
-
-    println!(
-        "Cumulative queued frames = {}",
-        cumulative_frames_queued
-    );
-    println!(
         "Cumulative frames rendered = {}",
         cumulative_frames_rendered
     );
     println!(
-        "Cumulative frames stolen from workers' queues before rendered = {}",
+        "Cumulative frames added to queue = {}",
+        cumulative_frames_queued
+    );
+    println!(
+        "Cumulative frames stolen from workers' queues = {}",
         cumulative_frames_stolen
+    );
+
+    println!(
+        "Cumulative .blend file reading time = {:.6} seconds.",
+        cumulative_blend_file_reading_time.as_secs_f64()
+    );
+    println!(
+        "Cumulative rendering time = {:.6} seconds.",
+        cumulative_rendering_time.as_secs_f64()
+    );
+    println!(
+        "Cumulative image saving time = {:.6} seconds.",
+        cumulative_image_saving_time.as_secs_f64()
+    );
+    println!(
+        "Cumulative idle time = {:.6} seconds.",
+        cumulative_idle_time.as_secs_f64()
     );
 
     println!();

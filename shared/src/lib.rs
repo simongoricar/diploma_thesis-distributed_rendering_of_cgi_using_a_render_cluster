@@ -4,3 +4,4 @@ pub mod jobs;
 pub mod logger;
 pub mod messages;
 pub mod results;
+pub mod websockets;

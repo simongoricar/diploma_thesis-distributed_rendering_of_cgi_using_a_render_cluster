@@ -26,7 +26,7 @@ use tokio_tungstenite::WebSocketStream;
 
 const NEXT_MESSAGE_TASK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const RECEIVER_BROADCAST_CHANNEL_SIZE: usize = 512;
-const DEFAULT_MESSAGE_WAIT_DURATION: Duration = Duration::from_secs(10);
+const DEFAULT_MESSAGE_WAIT_DURATION: Duration = Duration::from_secs(60);
 
 
 #[derive(Clone)]

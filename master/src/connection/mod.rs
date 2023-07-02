@@ -24,10 +24,11 @@ use shared::messages::queue::{
     WorkerFrameQueueItemRenderingEvent,
 };
 use shared::messages::SenderHandle;
+use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
-use tokio_tungstenite::accept_async;
+use tokio_tungstenite::accept_async_with_config;
 
 use crate::cluster::state::ClusterManagerState;
 use crate::connection::queue::{FrameOnWorker, WorkerQueue};
@@ -219,7 +220,7 @@ impl Worker {
 
         // Upgrades TcpStream to a WebSocket connection.
         logger.debug("Accepting TcpStream.");
-        let ws_stream = accept_async(stream)
+        let ws_stream = accept_async_with_config(stream, Some(DEFAULT_WEBSOCKET_CONFIG))
             .await
             .into_diagnostic()
             .wrap_err_with(|| miette!("Could not accept TcpStream."))?;

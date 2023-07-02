@@ -10,7 +10,7 @@ frame_range_to = 4
 wait_for_number_of_workers = 1
 
 output_directory_path = "%BASE%/blender-projects/04_very-simple/output"
-output_file_name_format = "#####"
+output_file_name_format = "######"
 output_file_format = "JPEG"
 
 [frame_distribution_strategy]

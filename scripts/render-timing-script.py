@@ -65,8 +65,21 @@ def parse_cli_arguments() -> CLIArguments:
 
 arguments: CLIArguments = parse_cli_arguments()
 
+
+def format_hash_frame_placeholders(raw_file_path: str, frame_number: int) -> str:
+    format_length: int = raw_file_path.count("#")
+    return raw_file_path.replace(
+        "#" * format_length,
+        "{string:{fill}>{amount}}".format(
+            string=str(frame_number),
+            fill="0",
+            amount=format_length
+        )
+    )
+
+
 bpy.context.scene.frame_set(arguments.frame_number)
-bpy.context.scene.render.filepath = arguments.output_path
+bpy.context.scene.render.filepath = format_hash_frame_placeholders(arguments.output_path, arguments.frame_number)
 bpy.context.scene.render.image_settings.file_format = arguments.output_format
 bpy.context.scene.render.image_settings.quality = 90
 

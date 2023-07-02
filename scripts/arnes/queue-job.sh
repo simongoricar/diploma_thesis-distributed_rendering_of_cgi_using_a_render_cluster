@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -e
 
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
 # Parse arguments
 while [ $# -gt 0 ]; do
   case "$1" in
     --jobFile=*)
       JOB_FILE_RELATIVE_TO_BASE="${1#*=}"
+      ;;
+    --resultsDirectory=*)
+      RUN_RESULTS_DIRECTORY="${1#*=}"
       ;;
     --runName=*)
       RUN_NAME="${1#*=}"
@@ -28,6 +33,11 @@ done
 
 if [[ -z "$JOB_FILE_RELATIVE_TO_BASE" ]]; then
   echo "Missing --jobFile!"
+  exit 2
+fi
+
+if [[ -z "$RUN_RESULTS_DIRECTORY" ]]; then
+  echo "Missing --resultsDirectory!"
   exit 2
 fi
 
@@ -55,8 +65,8 @@ FORMATTED_CURRENT_DATE_TIME=$(date +%Y-%m-%d_%H-%M-%S)
 
 # Run configuration
 RUN_HOST="hpc-login1"
-RUN_BASE_DIRECTORY="$HOME/diploma/distributed-rendering-diploma"
-RUN_RESULTS_DIRECTORY="$RUN_BASE_DIRECTORY/blender-projects/01_simple-animation/results"
+RUN_BASE_DIRECTORY=$(realpath "$SCRIPT_DIR/../..")
+REAL_RUN_RESULTS_DIRECTORY="$RUN_BASE_DIRECTORY/$RUN_RESULTS_DIRECTORY"
 
 JOB_FILE_ABSOLUTE_PATH="$RUN_BASE_DIRECTORY/$JOB_FILE_RELATIVE_TO_BASE"
 
@@ -83,7 +93,7 @@ mkdir -p logs
 
 
 echo "Starting master on login instance..."
-RUST_LOG="debug" screen -d -m -t "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.log" -- "$RUN_BASE_DIRECTORY/target/release/master" --host 0.0.0.0 --port "$RUN_PORT" run-job --resultsDirectory "$RUN_RESULTS_DIRECTORY" "$JOB_FILE_ABSOLUTE_PATH"
+RUST_LOG="debug" screen -d -m -t "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.log" -- "$RUN_BASE_DIRECTORY/target/release/master" --host 0.0.0.0 --port "$RUN_PORT" run-job --resultsDirectory "$REAL_RUN_RESULTS_DIRECTORY" "$JOB_FILE_ABSOLUTE_PATH"
 
 
 echo "Queueing workers on via srun..."

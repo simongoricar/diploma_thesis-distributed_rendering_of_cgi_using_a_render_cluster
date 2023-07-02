@@ -1,0 +1,17 @@
+job_name = "04_very-simple_measuring_14400f-5w_eager-naive-coarse"
+job_description = "Incredibly simple animation. 14400 frames, 5 workers, eager naive coarse strategy."
+
+project_file_path = "%BASE%/blender-projects/04_very-simple/04_very-simple.blend"
+
+frame_range_from = 1
+frame_range_to = 14400
+
+wait_for_number_of_workers = 5
+
+output_directory_path = "%BASE%/blender-projects/04_very-simple/output_14400f_5w_eager-naive-coarse"
+output_file_name_format = "######"
+output_file_format = "JPEG"
+
+[frame_distribution_strategy]
+strategy_type = "eager-naive-coarse"
+target_queue_size = 5

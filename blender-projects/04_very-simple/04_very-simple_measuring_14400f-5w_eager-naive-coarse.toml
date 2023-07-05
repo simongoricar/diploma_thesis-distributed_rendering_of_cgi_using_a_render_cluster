@@ -2,6 +2,7 @@ job_name = "04_very-simple_measuring_14400f-5w_eager-naive-coarse"
 job_description = "Incredibly simple animation. 14400 frames, 5 workers, eager naive coarse strategy."
 
 project_file_path = "%BASE%/blender-projects/04_very-simple/04_very-simple.blend"
+render_script_path = "%BASE%/scripts/render-timing-script.py"
 
 frame_range_from = 1
 frame_range_to = 14400

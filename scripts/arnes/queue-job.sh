@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
+set -x
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -23,6 +24,9 @@ while [ $# -gt 0 ]; do
       ;;
     --numWorkers=*)
       NUM_WORKERS="${1#*=}"
+      ;;
+    --exclusive)
+      EXCLUSIVE=1
       ;;
     *)
       echo -e "* Error: Invalid argument: \"$1\" *\n"
@@ -72,6 +76,7 @@ JOB_FILE_ABSOLUTE_PATH="$RUN_BASE_DIRECTORY/$JOB_FILE_RELATIVE_TO_BASE"
 
 # Worker limits
 TIME_LIMIT_MINUTES="${TIME_LIMIT_MINUTES:-300}"
+EXCLUSIVE="${EXCLUSIVE:-0})"
 MEMORY_LIMIT="8G"
 NUM_CPU_PER_TASK=4
 NUM_THREADS_PER_CORE=1
@@ -81,7 +86,14 @@ echo "Job file: \"$JOB_FILE_ABSOLUTE_PATH\"."
 echo "About to queue job $RUN_NAME on $RUN_HOST:$RUN_PORT with $NUM_WORKERS workers."
 echo "Each worker has $MEMORY_LIMIT memory, $NUM_THREADS_PER_CORE threads on $NUM_CPU_PER_TASK CPUs."
 echo "The job has a time limit of $TIME_LIMIT_MINUTES minutes."
-echo "The job will use --exclusive."
+
+if [ "$EXCLUSIVE" = 1 ]; then
+  EXCLUSIVE_OPT="--exclusive"
+  echo "The job will use --exclusive."
+else
+  EXCLUSIVE_OPT=""
+  echo "The job will NOT use --exclusive."
+fi
 
 
 read -r -p "Press ENTER to confirm and continue." </dev/tty
@@ -97,7 +109,7 @@ RUST_LOG="debug" screen -d -m -t "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -
 
 
 echo "Queueing workers on via srun..."
-screen -d -m -t "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cw_$RUN_NAME.log" -- srun --exclusive --job-name="cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" --ntasks="$NUM_WORKERS" --output="$RUN_BASE_DIRECTORY/logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.workers.log" --time="$TIME_LIMIT_MINUTES" --mem=$MEMORY_LIMIT --cpus-per-task=$NUM_CPU_PER_TASK --threads-per-core=$NUM_THREADS_PER_CORE --constraint="amd&rome" --dependency="singleton" --exclude="wn[201-224]" -- singularity exec --bind "$RUN_BASE_DIRECTORY/blender-projects" --env RUST_LOG="debug" "$HOME/diploma/distributed-rendering-diploma/blender-3.6.0.sif" "$RUN_BASE_DIRECTORY/target/release/worker" --masterServerHost "$RUN_HOST" --masterServerPort "$RUN_PORT" --baseDirectory "$RUN_BASE_DIRECTORY" --blenderBinary /usr/bin/blender
+screen -d -m -t "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cw_$RUN_NAME.log" -- srun "$EXCLUSIVE_OPT" --job-name="cw_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" --ntasks="$NUM_WORKERS" --output="$RUN_BASE_DIRECTORY/logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.workers.log" --time="$TIME_LIMIT_MINUTES" --mem=$MEMORY_LIMIT --cpus-per-task=$NUM_CPU_PER_TASK --threads-per-core=$NUM_THREADS_PER_CORE --constraint="amd&rome" --dependency="singleton" --exclude="wn[201-224]" -- singularity exec --bind "$RUN_BASE_DIRECTORY/blender-projects" --env RUST_LOG="debug" "$HOME/diploma/distributed-rendering-diploma/blender-3.6.0.sif" "$RUN_BASE_DIRECTORY/target/release/worker" --masterServerHost "$RUN_HOST" --masterServerPort "$RUN_PORT" --baseDirectory "$RUN_BASE_DIRECTORY" --blenderBinary /usr/bin/blender
 
 echo "Queued!"
 

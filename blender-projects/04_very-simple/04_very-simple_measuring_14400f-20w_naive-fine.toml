@@ -2,6 +2,7 @@ job_name = "04_very-simple_measuring_14400f-20w_naive-fine"
 job_description = "Incredibly simple animation. 14400 frames, 20 workers, naive fine strategy."
 
 project_file_path = "%BASE%/blender-projects/04_very-simple/04_very-simple.blend"
+render_script_path = "%BASE%/scripts/render-timing-script.py"
 
 frame_range_from = 1
 frame_range_to = 14400

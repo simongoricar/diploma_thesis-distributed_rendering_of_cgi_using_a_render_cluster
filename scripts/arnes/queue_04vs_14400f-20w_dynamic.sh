@@ -8,6 +8,6 @@ echo "Script resides in $SCRIPT_DIR."
   --jobFile="blender-projects/04_very-simple/04_very-simple_measuring_14400f-20w_dynamic.toml" \
   --resultsDirectory="blender-projects/04_very-simple/results" \
   --runName="04vs_14400f-20w_dynamic" \
-  --runPort="9932" \
+  --runPort="9923" \
   --runTimeLimitMinutes=400 \
   --numWorkers=20

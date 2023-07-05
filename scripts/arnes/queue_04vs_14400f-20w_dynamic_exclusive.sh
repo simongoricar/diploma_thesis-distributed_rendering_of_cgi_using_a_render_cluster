@@ -6,7 +6,7 @@ echo "Script resides in $SCRIPT_DIR."
 
 "$SCRIPT_DIR/queue-job.sh" \
   --jobFile="blender-projects/04_very-simple/04_very-simple_measuring_14400f-20w_dynamic.toml" \
-  --resultsDirectory="blender-projects/04_very-simple/results-14400f-20w_dynamic" \
+  --resultsDirectory="blender-projects/04_very-simple/results" \
   --runName="04vs_14400f-20w_dynamic_exclusive" \
   --runPort="9932" \
   --runTimeLimitMinutes=400 \

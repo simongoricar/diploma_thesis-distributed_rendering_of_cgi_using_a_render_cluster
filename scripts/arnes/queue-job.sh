@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -e
-set -x
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -102,7 +101,7 @@ cd "$RUN_BASE_DIRECTORY"
 mkdir -p logs
 
 
-echo "Starting master on login instance..."
+echo "Starting master server on login instance..."
 RUST_LOG="debug" screen -d -m -t "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -S "cm_${RUN_NAME}_$FORMATTED_CURRENT_DATE_TIME" -L -Logfile "logs/${FORMATTED_CURRENT_DATE_TIME}_cm_$RUN_NAME.log" -- "$RUN_BASE_DIRECTORY/target/release/master" --host "0.0.0.0" --port "$RUN_PORT" run-job --resultsDirectory "$REAL_RUN_RESULTS_DIRECTORY" "$JOB_FILE_ABSOLUTE_PATH"
 
 

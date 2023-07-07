@@ -1,4 +1,4 @@
-job_name = "04_very-simple_measuring_14400f-20w_eager-naive-coarse"
+job_name = "04vs_measuring_14400f-20w_eager-naive-coarse"
 job_description = "Incredibly simple animation. 14400 frames, 20 workers, eager naive coarse strategy."
 
 project_file_path = "%BASE%/blender-projects/04_very-simple/04_very-simple.blend"

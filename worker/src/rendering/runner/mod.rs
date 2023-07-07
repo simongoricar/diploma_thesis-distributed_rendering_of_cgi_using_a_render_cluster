@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::process::Stdio;
 
 use chrono::Utc;
-use log::{debug, info};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::jobs::BlenderJob;
 use shared::results::worker_trace::WorkerTraceBuilder;
 use tokio::process::Command;
+use tracing::{debug, info};
 
 use crate::rendering::runner::utilities::extract_blender_render_information;
 use crate::utilities::parse_with_base_directory_prefix;

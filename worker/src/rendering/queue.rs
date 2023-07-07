@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{debug, error, info};
 use miette::{miette, Context};
 use miette::{IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
@@ -10,6 +9,7 @@ use shared::messages::queue::{FrameQueueRemoveResult, WorkerFrameQueueItemFinish
 use shared::messages::SenderHandle;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::{debug, error, info};
 
 use crate::rendering::runner::BlenderJobRunner;
 

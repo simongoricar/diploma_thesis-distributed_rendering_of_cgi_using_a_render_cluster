@@ -4,7 +4,6 @@ use std::time::Duration;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
-use log::trace;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::logger::Logger;
@@ -13,6 +12,7 @@ use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
+use tracing::trace;
 
 pub struct WorkerSender {
     sender_channel: Arc<UnboundedSender<OutgoingMessage>>,

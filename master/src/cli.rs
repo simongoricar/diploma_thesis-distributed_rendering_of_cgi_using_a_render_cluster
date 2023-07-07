@@ -12,6 +12,12 @@ pub struct CLIArgs {
 
     #[arg(long = "port", help = "Port to bind the server to.")]
     pub bind_to_port: usize,
+
+    #[arg(
+        long = "logFilePath",
+        help = "Log output file path. Logs everything that is printed to the console."
+    )]
+    pub log_output_file_path: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]

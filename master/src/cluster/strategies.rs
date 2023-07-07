@@ -3,10 +3,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{info, trace};
 use miette::{miette, Result};
 use shared::jobs::{BlenderJob, DynamicStrategyOptions};
 use shared::messages::queue::FrameQueueRemoveResult;
+use tracing::{info, trace};
 
 use crate::cluster::state::ClusterManagerState;
 use crate::connection::queue::FrameOnWorker;

@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use log::{error, info, trace};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
@@ -11,6 +10,7 @@ use shared::messages::job::MasterJobStartedEvent;
 use shared::results::master_trace::MasterTrace;
 use shared::results::worker_trace::WorkerTrace;
 use tokio::net::{TcpListener, TcpStream};
+use tracing::{error, info, trace};
 
 use crate::cluster::state::ClusterManagerState;
 use crate::cluster::strategies::{

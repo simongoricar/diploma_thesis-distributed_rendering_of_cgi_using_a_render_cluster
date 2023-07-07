@@ -3,22 +3,24 @@ pub mod cluster;
 pub mod connection;
 
 use std::collections::HashMap;
-use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::{fs, io};
 
 use chrono::{DateTime, Local};
 use clap::Parser;
-use log::info;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::Serialize;
 use shared::jobs::BlenderJob;
 use shared::results::master_trace::MasterTrace;
 use shared::results::performance::WorkerPerformance;
 use shared::results::worker_trace::WorkerTrace;
+use tracing::info;
+use tracing_appender::rolling::RollingFileAppender;
+use tracing_subscriber::EnvFilter;
 
 use crate::cli::{CLIArgs, CLICommand};
 use crate::cluster::ClusterManager;
@@ -280,19 +282,88 @@ fn print_results(
     Ok(())
 }
 
+
+enum LogFileOutputMode {
+    None,
+    Some {
+        directory_path: PathBuf,
+        log_file_name: String,
+    },
+}
+
+enum FileOutputWriter {
+    NoOutput,
+    Some(RollingFileAppender),
+}
+
+impl Write for FileOutputWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            FileOutputWriter::Some(writer) => writer.write(buf),
+            _ => Ok(buf.len()),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            FileOutputWriter::Some(writer) => writer.flush(),
+            _ => Ok(()),
+        }
+    }
+}
+
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::try_init().into_diagnostic()?;
-
     let args = CLIArgs::parse();
+
+    let log_output_mode = if let Some(output_path) = &args.log_output_file_path {
+        let directory = output_path
+            .parent()
+            .ok_or_else(|| miette!("Could not parse --logFilePath's parent directory path."))?;
+
+        let file_name = output_path
+            .file_name()
+            .ok_or_else(|| miette!("Could not parse --logFilePath's file name."))?
+            .to_string_lossy()
+            .to_string();
+
+        LogFileOutputMode::Some {
+            directory_path: directory.to_path_buf(),
+            log_file_name: file_name,
+        }
+    } else {
+        LogFileOutputMode::None
+    };
+
+    let (log_file_writer, _guard) = tracing_appender::non_blocking(
+        if let LogFileOutputMode::Some {
+            directory_path,
+            log_file_name,
+        } = log_output_mode
+        {
+            FileOutputWriter::Some(tracing_appender::rolling::never(
+                directory_path,
+                log_file_name,
+            ))
+        } else {
+            FileOutputWriter::NoOutput
+        },
+    );
+
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(log_file_writer)
+        .init();
+
 
     #[allow(irrefutable_let_patterns)]
     if let CLICommand::RunJob(run_job_args) = args.command {
         let start_time = Local::now();
 
         info!(
-            "Loading job file from {}.",
-            run_job_args.job_file_path
+            job_file_path = run_job_args.job_file_path,
+            "Loading job file.",
         );
 
         let job = BlenderJob::load_from_file(run_job_args.job_file_path)
@@ -310,8 +381,11 @@ async fn main() -> Result<()> {
         .wrap_err_with(|| miette!("Failed to run master server to job completion."))?;
 
         info!(
-            "Job has been completed and traces have been received, analyzing and saving to \"{}\".",
-            run_job_args.results_directory_path.to_string_lossy()
+            results_directory_path = run_job_args
+                .results_directory_path
+                .to_string_lossy()
+                .to_string(),
+            "Job has been completed and traces have been received, analyzing and saving.",
         );
 
 

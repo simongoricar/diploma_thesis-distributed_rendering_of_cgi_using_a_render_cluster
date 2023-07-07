@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use chrono::Utc;
 use futures_util::StreamExt;
-use log::{debug, info, trace, warn};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::handshake::WorkerHandshakeResponse;
@@ -27,6 +26,7 @@ use shared::results::worker_trace::WorkerTraceBuilder;
 use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
 use tokio::net::TcpStream;
 use tokio_tungstenite::client_async_with_config;
+use tracing::{debug, info, trace, warn};
 
 use crate::connection::receiver::MasterReceiver;
 use crate::connection::sender::MasterSender;

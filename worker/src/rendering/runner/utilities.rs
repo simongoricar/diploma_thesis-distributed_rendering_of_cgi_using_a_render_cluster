@@ -4,11 +4,11 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::{DateTime, LocalResult, TimeZone, Utc};
-use log::warn;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use regex::Regex;
 use serde::Deserialize;
 use shared::results::worker_trace::FrameRenderTime;
+use tracing::warn;
 
 
 pub struct PartialRenderStatistics {

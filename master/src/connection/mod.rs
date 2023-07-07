@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use log::debug;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
@@ -29,6 +28,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_tungstenite::accept_async_with_config;
+use tracing::debug;
 
 use crate::cluster::state::ClusterManagerState;
 use crate::connection::queue::{FrameOnWorker, WorkerQueue};

@@ -36,4 +36,10 @@ pub struct CLIArgs {
         help = "Additional arguments to append after the all other arguments when rendering."
     )]
     pub blender_append_arguments: Option<String>,
+
+    #[arg(
+        long = "logFilePath",
+        help = "Log output file path. Logs everything that is printed to the console."
+    )]
+    pub log_output_file_path: Option<PathBuf>,
 }

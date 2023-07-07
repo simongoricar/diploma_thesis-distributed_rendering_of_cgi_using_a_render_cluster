@@ -3,7 +3,6 @@ use std::time::{Duration, SystemTime};
 
 use futures_util::stream::SplitStream;
 use futures_util::StreamExt;
-use log::{debug, info, trace, warn};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshakeRequest};
@@ -17,6 +16,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::WebSocketStream;
+use tracing::{debug, info, trace, warn};
 
 #[derive(Clone, Debug)]
 pub struct BroadcastSenders {

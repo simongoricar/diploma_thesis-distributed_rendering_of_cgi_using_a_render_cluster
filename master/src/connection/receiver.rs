@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use futures_util::stream::SplitStream;
 use futures_util::StreamExt;
-use log::{info, trace, warn};
 use miette::{miette, IntoDiagnostic};
 use miette::{Context, Result};
 use shared::cancellation::CancellationToken;
@@ -23,6 +22,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::WebSocketStream;
+use tracing::{info, trace, warn};
 
 const NEXT_MESSAGE_TASK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const RECEIVER_BROADCAST_CHANNEL_SIZE: usize = 512;

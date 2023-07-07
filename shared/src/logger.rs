@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use log::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Clone)]
 pub struct Logger {

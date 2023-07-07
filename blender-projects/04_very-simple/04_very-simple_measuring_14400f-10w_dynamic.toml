@@ -1,0 +1,21 @@
+job_name = "04vs_measuring_14400f-10w_dynamic"
+job_description = "Incredibly simple animation. 14400 frames, 10 workers, dynamic strategy."
+
+project_file_path = "%BASE%/blender-projects/04_very-simple/04_very-simple.blend"
+render_script_path = "%BASE%/scripts/render-timing-script.py"
+
+frame_range_from = 1
+frame_range_to = 14400
+
+wait_for_number_of_workers = 10
+
+output_directory_path = "%BASE%/blender-projects/04_very-simple/output_14400f_10w_dynamic"
+output_file_name_format = "######"
+output_file_format = "JPEG"
+
+[frame_distribution_strategy]
+strategy_type = "dynamic"
+target_queue_size = 4
+min_queue_size_to_steal = 2
+min_seconds_before_resteal_to_elsewhere = 40
+min_seconds_before_resteal_to_original_worker = 80

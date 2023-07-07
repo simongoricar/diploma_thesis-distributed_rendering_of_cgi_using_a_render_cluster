@@ -10,6 +10,8 @@ serde = { version = "1.0.162", features = ["derive"] }
 tokio-tungstenite = "0.19.0"
 tokio = { version = "1.27.0", features = ["full"] }
 tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+tracing-appender = "0.2.2"
 serde_json = "1.0.96"
 serde_with = { version = "3.0.0", features = ["chrono"] }
 miette = { version = "5.7.0" }

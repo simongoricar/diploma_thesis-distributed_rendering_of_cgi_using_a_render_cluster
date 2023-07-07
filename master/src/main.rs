@@ -3,24 +3,23 @@ pub mod cluster;
 pub mod connection;
 
 use std::collections::HashMap;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
-use std::{fs, io};
 
 use chrono::{DateTime, Local};
 use clap::Parser;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::Serialize;
 use shared::jobs::BlenderJob;
+use shared::logging::initialize_console_and_file_logging;
 use shared::results::master_trace::MasterTrace;
 use shared::results::performance::WorkerPerformance;
 use shared::results::worker_trace::WorkerTrace;
 use tracing::info;
-use tracing_appender::rolling::RollingFileAppender;
-use tracing_subscriber::EnvFilter;
 
 use crate::cli::{CLIArgs, CLICommand};
 use crate::cluster::ClusterManager;
@@ -283,79 +282,11 @@ fn print_results(
 }
 
 
-enum LogFileOutputMode {
-    None,
-    Some {
-        directory_path: PathBuf,
-        log_file_name: String,
-    },
-}
-
-enum FileOutputWriter {
-    NoOutput,
-    Some(RollingFileAppender),
-}
-
-impl Write for FileOutputWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            FileOutputWriter::Some(writer) => writer.write(buf),
-            _ => Ok(buf.len()),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            FileOutputWriter::Some(writer) => writer.flush(),
-            _ => Ok(()),
-        }
-    }
-}
-
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = CLIArgs::parse();
 
-    let log_output_mode = if let Some(output_path) = &args.log_output_file_path {
-        let directory = output_path
-            .parent()
-            .ok_or_else(|| miette!("Could not parse --logFilePath's parent directory path."))?;
-
-        let file_name = output_path
-            .file_name()
-            .ok_or_else(|| miette!("Could not parse --logFilePath's file name."))?
-            .to_string_lossy()
-            .to_string();
-
-        LogFileOutputMode::Some {
-            directory_path: directory.to_path_buf(),
-            log_file_name: file_name,
-        }
-    } else {
-        LogFileOutputMode::None
-    };
-
-    let (log_file_writer, _guard) = tracing_appender::non_blocking(
-        if let LogFileOutputMode::Some {
-            directory_path,
-            log_file_name,
-        } = log_output_mode
-        {
-            FileOutputWriter::Some(tracing_appender::rolling::never(
-                directory_path,
-                log_file_name,
-            ))
-        } else {
-            FileOutputWriter::NoOutput
-        },
-    );
-
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_writer(log_file_writer)
-        .init();
-
+    let _guard = initialize_console_and_file_logging(args.log_output_file_path.as_ref())?;
 
     #[allow(irrefutable_let_patterns)]
     if let CLICommand::RunJob(run_job_args) = args.command {
@@ -411,7 +342,7 @@ async fn main() -> Result<()> {
         )?;
 
         print_results(&master_trace, &worker_performances)?;
-    }
+    };
 
     Ok(())
 }

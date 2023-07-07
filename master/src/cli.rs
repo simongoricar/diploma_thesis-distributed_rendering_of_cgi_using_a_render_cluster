@@ -15,7 +15,8 @@ pub struct CLIArgs {
 
     #[arg(
         long = "logFilePath",
-        help = "Log output file path. Logs everything that is printed to the console."
+        help = "Log output file path. Logs everything that is printed to the console.",
+        global = true
     )]
     pub log_output_file_path: Option<PathBuf>,
 }

@@ -22,9 +22,12 @@ serialization/src/compiled_definitions
 
 ## Other assets
 *.blend1
+*.sif
+
 blender-projects/**/results
 blender-projects/**/*.png
 blender-projects/**/*.jpg
 blender-projects/**/*.jpeg
+
 __pycache__
 logs

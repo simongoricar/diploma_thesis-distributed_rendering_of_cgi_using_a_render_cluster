@@ -1,4 +1,4 @@
-job_name = "04_very-simple_demo_60f-1w_eager-naive-coarse"
+job_name = "04vs_demo_60f-1w_eager-naive-coarse"
 job_description = "Incredibly simple animation. DEMO. 60 frames, 1 worker, eager naive coarse strategy."
 
 project_file_path = "%BASE%/blender-projects/04_very-simple/04_very-simple.blend"

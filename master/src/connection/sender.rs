@@ -6,8 +6,8 @@ use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
-use shared::logger::Logger;
 use shared::messages::{OutgoingMessage, SenderHandle};
+use shared::worker_logger::WorkerLogger;
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
@@ -24,7 +24,7 @@ impl WorkerSender {
     pub fn new(
         websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
         global_cancellation_token: CancellationToken,
-        logger: Arc<Logger>,
+        logger: Arc<WorkerLogger>,
     ) -> Self {
         let (message_send_queue_tx, message_send_queue_rx) =
             futures_channel::mpsc::unbounded::<OutgoingMessage>();
@@ -55,7 +55,7 @@ impl WorkerSender {
      */
 
     async fn run(
-        logger: Arc<Logger>,
+        logger: Arc<WorkerLogger>,
         mut websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
         mut message_send_queue_receiver: UnboundedReceiver<OutgoingMessage>,
         global_cancellation_token: CancellationToken,

@@ -13,7 +13,6 @@ use futures_util::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
-use shared::logger::Logger;
 use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshakeRequest};
 use shared::messages::heartbeat::MasterHeartbeatRequest;
 use shared::messages::queue::{
@@ -24,6 +23,7 @@ use shared::messages::queue::{
 };
 use shared::messages::SenderHandle;
 use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
+use shared::worker_logger::WorkerLogger;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -51,7 +51,7 @@ pub struct Worker {
     pub address: SocketAddr,
 
     /// Logger instance (so we can display logs with IP address, port and other context).
-    pub logger: Arc<Logger>,
+    pub logger: Arc<WorkerLogger>,
 
     /// Reference to the `ClusterManager`'s state.
     pub cluster_state: Arc<ClusterManagerState>,
@@ -204,7 +204,7 @@ impl Worker {
         heartbeat_cancellation_token: CancellationToken,
         cluster_cancellation_token: CancellationToken,
     ) -> Result<(
-        Arc<Logger>,
+        Arc<WorkerLogger>,
         WorkerSender,
         Arc<WorkerReceiver>,
         Arc<WorkerRequester>,
@@ -212,7 +212,7 @@ impl Worker {
     )> {
         // Initialize logger that will be distributed across this worker instance.
         let address = stream.peer_addr().into_diagnostic()?;
-        let logger = Arc::new(Logger::new(format!(
+        let logger = Arc::new(WorkerLogger::new(format!(
             "[worker|{}:{}]",
             address.ip(),
             address.port()
@@ -270,7 +270,7 @@ impl Worker {
             cluster_cancellation_token.clone(),
         ));
 
-        logger.info("Worker connection fully established.");
+        logger.info("Connection fully established.");
 
         Ok((
             logger,
@@ -289,7 +289,7 @@ impl Worker {
     ///
     /// After these three steps, the connection is considered to be established.
     async fn perform_handshake(
-        logger: Arc<Logger>,
+        logger: Arc<WorkerLogger>,
         sender: &WorkerSender,
         receiver: Arc<WorkerReceiver>,
     ) -> Result<()> {
@@ -306,7 +306,7 @@ impl Worker {
             .wrap_err_with(|| miette!("Failed to receive handshake response."))?;
 
         logger.info(format!(
-            "Got handshake response from worker. worker_version={}, sending acknowledgement.",
+            "Got handshake response. worker_version={}, sending acknowledgement.",
             handshake_response.worker_version,
         ));
 
@@ -324,7 +324,7 @@ impl Worker {
     async fn manage_incoming_messages(
         worker_address: SocketAddr,
         worker_queue: Arc<Mutex<WorkerQueue>>,
-        logger: Arc<Logger>,
+        logger: Arc<WorkerLogger>,
         receiver: Arc<WorkerReceiver>,
         cluster_state: Arc<ClusterManagerState>,
         cluster_cancellation_token: CancellationToken,
@@ -387,7 +387,7 @@ impl Worker {
     /// Runs as long as the async sender channel can be written to
     /// or until the worker doesn't respond to a heartbeat.
     async fn maintain_heartbeat(
-        logger: Arc<Logger>,
+        logger: Arc<WorkerLogger>,
         event_dispatcher: Arc<WorkerReceiver>,
         sender_handle: SenderHandle,
         heartbeat_cancellation_token: CancellationToken,
@@ -444,7 +444,7 @@ impl Worker {
         job_name: String,
         frame_index: usize,
         worker_address: SocketAddr,
-        logger: Arc<Logger>,
+        logger: Arc<WorkerLogger>,
         worker_queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
     ) -> Result<()> {
@@ -467,7 +467,7 @@ impl Worker {
     async fn mark_frame_as_finished(
         job_name: String,
         frame_index: usize,
-        logger: Arc<Logger>,
+        logger: Arc<WorkerLogger>,
         worker_queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
     ) -> Result<()> {

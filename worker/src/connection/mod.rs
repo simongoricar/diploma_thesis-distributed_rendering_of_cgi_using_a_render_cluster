@@ -8,7 +8,7 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
-use shared::messages::handshake::WorkerHandshakeResponse;
+use shared::messages::handshake::{MasterHandshakeRequest, WorkerHandshakeResponse};
 use shared::messages::heartbeat::WorkerHeartbeatResponse;
 use shared::messages::job::{
     MasterJobFinishedRequest,
@@ -25,6 +25,7 @@ use shared::messages::SenderHandle;
 use shared::results::worker_trace::WorkerTraceBuilder;
 use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
 use tokio::net::TcpStream;
+use tokio::sync::broadcast::Receiver;
 use tokio_tungstenite::client_async_with_config;
 use tracing::{debug, info, trace, warn};
 
@@ -75,9 +76,10 @@ impl Worker {
 
         let sender = MasterSender::new(ws_sink, global_cancellation_token.clone());
 
-        let receiver = MasterReceiver::new(ws_stream, global_cancellation_token.clone());
+        let (receiver, handshake_request_receiver) =
+            MasterReceiver::new(ws_stream, global_cancellation_token.clone());
 
-        Self::perform_handshake(&sender, &receiver)
+        Self::perform_handshake(&sender, &receiver, handshake_request_receiver)
             .await
             .wrap_err_with(|| miette!("Failed to perform handshake."))?;
 
@@ -151,9 +153,12 @@ impl Worker {
 
     /// Performs our internal WebSocket handshake
     /// (master handshake request, worker response, master acknowledgement).
-    async fn perform_handshake(sender: &MasterSender, receiver: &MasterReceiver) -> Result<()> {
+    async fn perform_handshake(
+        sender: &MasterSender,
+        receiver: &MasterReceiver,
+        handshake_request_receiver: Receiver<MasterHandshakeRequest>,
+    ) -> Result<()> {
         let sender_handle = sender.sender_handle();
-        let handshake_request_receiver = receiver.handshake_request_receiver();
         let handshake_ack_receiver = receiver.handshake_ack_receiver();
 
         info!("Waiting for handshake request from master server.");

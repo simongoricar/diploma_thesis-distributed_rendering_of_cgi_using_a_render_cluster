@@ -59,7 +59,7 @@ impl MasterReceiver {
     pub fn new(
         websocket_stream: SplitStream<WebSocketStream<TcpStream>>,
         cancellation_token: CancellationToken,
-    ) -> Self {
+    ) -> (Self, Receiver<MasterHandshakeRequest>) {
         // Initialize broadcast channels.
         let (handshake_request_tx, _) =
             broadcast::channel::<MasterHandshakeRequest>(RECEIVER_BROADCAST_CHANNEL_SIZE);
@@ -96,16 +96,23 @@ impl MasterReceiver {
             job_finished_request: job_finished_request_tx_arc,
         };
 
+        // We need to create a receiver before starting the event distribution loop below,
+        // because we might otherwise miss the very first message (this is a matter of a millisecond or two).
+        let handshake_request_receiver_handle = senders.handshake_request.subscribe();
+
         let task_join_handle = tokio::spawn(Self::run(
             senders.clone(),
             websocket_stream,
             cancellation_token,
         ));
 
-        Self {
-            senders,
-            task_join_handle,
-        }
+        (
+            Self {
+                senders,
+                task_join_handle,
+            },
+            handshake_request_receiver_handle,
+        )
     }
 
     pub async fn join(self) -> Result<()> {

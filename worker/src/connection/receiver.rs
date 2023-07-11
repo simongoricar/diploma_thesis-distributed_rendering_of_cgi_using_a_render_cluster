@@ -18,6 +18,9 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, info, trace, warn};
 
+const DEFAULT_MESSAGE_WAIT_DURATION: Duration = Duration::from_secs(60);
+
+
 #[derive(Clone, Debug)]
 pub struct BroadcastSenders {
     handshake_request: Arc<Sender<MasterHandshakeRequest>>,
@@ -238,7 +241,7 @@ impl MasterReceiver {
         mut receiver: Receiver<R>,
         timeout: Option<Duration>,
     ) -> Result<R> {
-        let timeout = timeout.unwrap_or(Duration::from_secs(5));
+        let timeout = timeout.unwrap_or(DEFAULT_MESSAGE_WAIT_DURATION);
 
         let receiver_future = async {
             receiver.recv().await.into_diagnostic().wrap_err_with(|| {

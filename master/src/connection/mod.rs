@@ -213,7 +213,7 @@ impl Worker {
         // Initialize logger that will be distributed across this worker instance.
         let address = stream.peer_addr().into_diagnostic()?;
         let logger = Arc::new(WorkerLogger::new(format!(
-            "[worker|{}:{}]",
+            "{}:{}",
             address.ip(),
             address.port()
         )));

@@ -1,10 +1,10 @@
-use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use miette::{miette, Result};
 use shared::jobs::{BlenderJob, DynamicStrategyOptions};
+use shared::messages::handshake::WorkerID;
 use shared::messages::queue::FrameQueueRemoveResult;
 use tracing::{info, trace};
 
@@ -32,7 +32,7 @@ pub async fn naive_fine_distribution_strategy(
             if worker.has_empty_queue().await {
                 trace!(
                     "Worker {} has empty queue, trying to queue.",
-                    worker.address
+                    worker.id
                 );
 
                 // Find next pending frame and queue it on this worker (if available).
@@ -46,7 +46,7 @@ pub async fn naive_fine_distribution_strategy(
 
                 info!(
                     "Queueing frame {} on worker {}.",
-                    next_frame_index, worker.address
+                    next_frame_index, worker.id
                 );
 
                 worker
@@ -54,7 +54,7 @@ pub async fn naive_fine_distribution_strategy(
                     .await?;
 
                 shared_state
-                    .mark_frame_as_queued_on_worker(worker.address, next_frame_index, None)
+                    .mark_frame_as_queued_on_worker(worker.id, next_frame_index, None)
                     .await?;
             }
         }
@@ -88,7 +88,7 @@ pub async fn naive_coarse_distribution_strategy(
 
             trace!(
                 "Worker {} has {} queued frames.",
-                worker.address,
+                worker.id,
                 worker_num_queued_frames
             );
 
@@ -96,7 +96,7 @@ pub async fn naive_coarse_distribution_strategy(
                 let frames_to_limit = target_queue_size - worker_num_queued_frames;
                 trace!(
                     "Worker {} has {} (< {}) queued frames, trying to top up.",
-                    worker.address,
+                    worker.id,
                     worker_num_queued_frames,
                     target_queue_size
                 );
@@ -112,7 +112,7 @@ pub async fn naive_coarse_distribution_strategy(
 
                     info!(
                         "Queueing frame {} on worker {}.",
-                        next_frame_index, worker.address
+                        next_frame_index, worker.id
                     );
 
                     worker
@@ -125,7 +125,7 @@ pub async fn naive_coarse_distribution_strategy(
                     );
 
                     shared_state
-                        .mark_frame_as_queued_on_worker(worker.address, next_frame_index, None)
+                        .mark_frame_as_queued_on_worker(worker.id, next_frame_index, None)
                         .await?;
 
                     trace!(
@@ -153,7 +153,7 @@ pub async fn naive_coarse_distribution_strategy(
  * Dynamic distribution strategy
  */
 fn select_best_frame_to_steal<'a>(
-    worker_address: SocketAddr,
+    worker_id: WorkerID,
     worker_frame_queue: &'a [FrameOnWorker],
     options: &DynamicStrategyOptions,
 ) -> Option<&'a FrameOnWorker> {
@@ -171,8 +171,8 @@ fn select_best_frame_to_steal<'a>(
         .rev()
     {
         let since_queued = frame.queued_at.elapsed();
-        if let Some(previous_worker_address) = frame.stolen_from.as_ref() {
-            if previous_worker_address == &worker_address {
+        if let Some(previous_worker_id) = frame.stolen_from.as_ref() {
+            if previous_worker_id == &worker_id {
                 if since_queued.as_secs_f64()
                     >= options.min_seconds_before_resteal_to_original_worker as f64
                 {
@@ -191,7 +191,7 @@ fn select_best_frame_to_steal<'a>(
 }
 
 async fn find_busiest_worker_and_frame_to_steal_from<'a>(
-    worker_address: SocketAddr,
+    worker_id: WorkerID,
     workers_list: Vec<&'a Worker>,
     options: &DynamicStrategyOptions,
 ) -> Option<(&'a Worker, usize, FrameOnWorker)> {
@@ -201,7 +201,7 @@ async fn find_busiest_worker_and_frame_to_steal_from<'a>(
     let mut busiest_worker: Option<(&'a Worker, usize, FrameOnWorker)> = None;
     for other_worker in workers_list {
         // We shouldn't steal frame from and give back to the same worker.
-        if other_worker.address == worker_address {
+        if other_worker.id == worker_id {
             continue;
         }
 
@@ -213,7 +213,7 @@ async fn find_busiest_worker_and_frame_to_steal_from<'a>(
             // Update the busiest worker if the current worker has a bigger queue and a potential frame to steal.
             if other_worker_queue_size > *best_worker_queue_size {
                 let best_frame_to_steal = select_best_frame_to_steal(
-                    worker_address,
+                    worker_id,
                     &other_worker_queue_locked.queue,
                     options,
                 );
@@ -229,7 +229,7 @@ async fn find_busiest_worker_and_frame_to_steal_from<'a>(
         } else if other_worker_queue_size > options.min_queue_size_to_steal {
             // If no busiest worker yet, set one, but only if it has a large enough queue to warrant stealing from.
             let best_frame_to_steal = select_best_frame_to_steal(
-                worker_address,
+                worker_id,
                 &other_worker_queue_locked.queue,
                 options,
             );
@@ -297,7 +297,7 @@ pub async fn dynamic_distribution_strategy(
                     // Queue globally unqueued frame.
                     info!(
                         "Worker {}: queueing globally unqueued frame ({}).",
-                        worker.address, next_unqueued_frame,
+                        worker.id, next_unqueued_frame,
                     );
 
                     worker
@@ -305,7 +305,7 @@ pub async fn dynamic_distribution_strategy(
                         .await?;
 
                     shared_state
-                        .mark_frame_as_queued_on_worker(worker.address, next_unqueued_frame, None)
+                        .mark_frame_as_queued_on_worker(worker.id, next_unqueued_frame, None)
                         .await?;
                 } else {
                     // All frames have been queued already, steal from some other worker instead.
@@ -313,7 +313,7 @@ pub async fn dynamic_distribution_strategy(
                     // and also prefer workers with longest queues.
                     // See `find_busiest_worker_and_frame_to_steal_from` for more information.
                     let busiest_worker = find_busiest_worker_and_frame_to_steal_from(
-                        worker.address,
+                        worker.id,
                         workers_locked.values().collect::<Vec<&Worker>>(),
                         &options,
                     )
@@ -332,9 +332,9 @@ pub async fn dynamic_distribution_strategy(
                     // and queue it on the one with the shorter queue.
                     info!(
                         "Worker {}: global unqueued pool is empty, stealing frame {} from worker {} instead.",
-                        worker.address,
+                        worker.id,
                         best_frame.frame_index,
-                        busiest_worker.address,
+                        busiest_worker.id,
                     );
 
                     let unqueue_result = busiest_worker
@@ -350,7 +350,7 @@ pub async fn dynamic_distribution_strategy(
                             // An issue of latency, simply ignore the "error".
                             info!(
                                 "Worker {}: can't steal, frame {} has already started rendering on original worker.",
-                                worker.address,
+                                worker.id,
                                 best_frame.frame_index,
                             );
                             continue;
@@ -359,7 +359,7 @@ pub async fn dynamic_distribution_strategy(
                             // An issue of latency, simply ignore the "error".
                             info!(
                                 "Worker {}: can't steal, frame {} has already finished on original worker.",
-                                worker.address,
+                                worker.id,
                                 best_frame.frame_index,
                             );
                             continue;
@@ -377,22 +377,22 @@ pub async fn dynamic_distribution_strategy(
                         .queue_frame(
                             best_frame.job,
                             best_frame.frame_index,
-                            Some(busiest_worker.address),
+                            Some(busiest_worker.id),
                         )
                         .await?;
 
                     shared_state
                         .mark_frame_as_queued_on_worker(
-                            worker.address,
+                            worker.id,
                             best_frame.frame_index,
-                            Some(busiest_worker.address),
+                            Some(busiest_worker.id),
                         )
                         .await?;
 
 
                     info!(
                         "Worker {}: frame {} successfully reassigned from {} to itself.",
-                        worker.address, best_frame.frame_index, busiest_worker.address,
+                        worker.id, best_frame.frame_index, busiest_worker.id,
                     );
                 }
             }

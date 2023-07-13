@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::stream::SplitStream;
-use futures_util::StreamExt;
 use miette::{miette, IntoDiagnostic};
 use miette::{Context, Result};
 use shared::cancellation::CancellationToken;
@@ -17,12 +15,13 @@ use shared::messages::queue::{
 };
 use shared::messages::traits::Message;
 use shared::messages::{parse_websocket_message, WebSocketMessage};
-use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::WebSocketStream;
-use tracing::{info, trace, warn};
+use tracing::warn;
+
+use crate::cluster::ReconnectableClientConnection;
+use crate::connection::worker_logger::WorkerLogger;
 
 const NEXT_MESSAGE_TASK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const RECEIVER_BROADCAST_CHANNEL_SIZE: usize = 512;
@@ -61,7 +60,8 @@ pub struct WorkerReceiver {
 impl WorkerReceiver {
     /// Initialize a new `WorkerEventDispatcher`, consuming the WebSocket connection's async receiver channel.
     pub fn new(
-        websocket_stream: SplitStream<WebSocketStream<TcpStream>>,
+        connection: Arc<ReconnectableClientConnection>,
+        logger: WorkerLogger,
         global_cancellation_token: CancellationToken,
     ) -> Self {
         // Initialize broadcast channels.
@@ -101,8 +101,9 @@ impl WorkerReceiver {
         };
 
         let dispatcher_join_handle = tokio::spawn(Self::run(
-            websocket_stream,
+            connection,
             senders.clone(),
+            logger,
             global_cancellation_token,
         ));
 
@@ -119,44 +120,40 @@ impl WorkerReceiver {
     /// Run the event dispatcher indefinitely, reading the incoming WebSocket messages
     /// and broadcasting them to subscribed `tokio::broadcast::Receiver`s.
     async fn run(
-        mut websocket_stream: SplitStream<WebSocketStream<TcpStream>>,
+        connection: Arc<ReconnectableClientConnection>,
         broadcast_senders: BroadcastSenders,
+        logger: WorkerLogger,
         global_cancellation_token: CancellationToken,
     ) -> Result<()> {
-        info!("WorkerReceiver: Running WebSocket stream reading and broadcasting loop.");
+        logger.info("Starting task loop: parsing and broadcasting incoming messages.");
 
         loop {
-            let next_message_result = tokio::time::timeout(
-                NEXT_MESSAGE_TASK_CHECK_INTERVAL,
-                websocket_stream.next(),
-            )
-            .await;
-
             if global_cancellation_token.is_cancelled() {
-                trace!("WorkerReceiver: Stopping (cluster stopping).");
+                logger.debug("Stopping parsing and incoming message broadcasting loop.");
                 break;
             }
 
+            let next_message_result = tokio::time::timeout(
+                NEXT_MESSAGE_TASK_CHECK_INTERVAL,
+                connection.receive_message(),
+            )
+            .await;
+
             let raw_message = match next_message_result {
-                Ok(potential_message) => potential_message
-                    .ok_or_else(|| miette!("Could not read from WebSocket stream - None."))?
-                    .into_diagnostic()
-                    .wrap_err_with(|| miette!("Errored while receiving from WebSocket stream."))?,
+                Ok(potential_message) => potential_message.wrap_err_with(|| {
+                    miette!("Failed to receive message from reconnectable client connection.")
+                })?,
                 // Simply wait two more seconds for the next message
                 // (this Err happens when we time out on waiting for the next message).
                 Err(_) => continue,
             };
 
-            let parsed_message = {
-                let optional_message = parse_websocket_message(raw_message)
-                    .wrap_err_with(|| miette!("Could not parse incoming WebSocket message."))?;
-
-                if let Some(message) = optional_message {
-                    message
-                } else {
-                    // Simply not a WS message we should care about (Ping/Pong/Frame/etc.).
-                    continue;
-                }
+            let parsed_message = match parse_websocket_message(raw_message)
+                .wrap_err_with(|| miette!("Could not parse incoming WebSocket message."))?
+            {
+                Some(message) => message,
+                // This is a message we should ignore (ping/pong/...)
+                None => continue,
             };
 
             // We ignore the errors when `.send`-ing because the only reason `send` can fail

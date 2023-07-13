@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
@@ -25,8 +24,8 @@ use crate::cli::{CLIArgs, CLICommand};
 use crate::cluster::ClusterManager;
 
 fn parse_worker_traces(
-    worker_traces: Vec<(SocketAddr, WorkerTrace)>,
-) -> Result<Vec<(SocketAddr, WorkerPerformance)>> {
+    worker_traces: Vec<(String, WorkerTrace)>,
+) -> Result<Vec<(String, WorkerPerformance)>> {
     worker_traces
         .into_iter()
         .map(|(address, trace)| {
@@ -37,7 +36,7 @@ fn parse_worker_traces(
                 Err(error) => Err(error),
             }
         })
-        .collect::<Result<Vec<(SocketAddr, WorkerPerformance)>>>()
+        .collect::<Result<Vec<(String, WorkerPerformance)>>>()
 }
 
 #[derive(Serialize)]
@@ -51,17 +50,11 @@ fn save_raw_traces(
     job: &BlenderJob,
     output_directory: &Path,
     master_trace: &MasterTrace,
-    worker_traces: &[(SocketAddr, WorkerTrace)],
+    worker_traces: &[(String, WorkerTrace)],
 ) -> Result<()> {
     let traces_hash_map = worker_traces
         .iter()
-        .map(|(address, trace)| {
-            (
-                // TODO Add hostname prefix (or maybe a worker ID?)
-                format!("{}:{}", address.ip(), address.port()),
-                trace.clone(),
-            )
-        })
+        .map(|(worker_full_name, trace)| (worker_full_name.to_string(), trace.clone()))
         .collect();
 
     let wrapped_raw_traces = RawTraceWrapper {
@@ -109,16 +102,11 @@ fn save_processed_results(
     start_time: &DateTime<Local>,
     job: &BlenderJob,
     output_directory: &Path,
-    worker_performance: &[(SocketAddr, WorkerPerformance)],
+    worker_performance: &[(String, WorkerPerformance)],
 ) -> Result<()> {
     let worker_perf_map: HashMap<String, WorkerPerformance> = worker_performance
         .iter()
-        .map(|(address, performance)| {
-            (
-                format!("{}:{}", address.ip(), address.port()),
-                performance.clone(),
-            )
-        })
+        .map(|(worker_full_name, performance)| (worker_full_name.to_string(), performance.clone()))
         .collect();
 
     let wrapped_results = ProcessedResultsWrapper {
@@ -157,7 +145,7 @@ fn save_processed_results(
 
 fn print_results(
     master_performance: &MasterTrace,
-    worker_performance: &Vec<(SocketAddr, WorkerPerformance)>,
+    worker_performance: &Vec<(String, WorkerPerformance)>,
 ) -> Result<()> {
     /*
      * Individual worker statistics
@@ -176,7 +164,7 @@ fn print_results(
     let mut cumulative_idle_time = Duration::new(0, 0);
 
 
-    for (address, performance) in worker_performance {
+    for (worker_full_name, performance) in worker_performance {
         cumulative_frames_rendered += performance.total_frames_rendered;
         cumulative_frames_queued += performance.total_frames_queued;
         cumulative_frames_stolen += performance.total_frames_stolen_from_queue;
@@ -188,7 +176,7 @@ fn print_results(
 
 
 
-        println!("[Worker {}:{}]", address.ip(), address.port());
+        println!("[Worker {}]", worker_full_name);
 
         println!(
             "Total queued frames = {}",

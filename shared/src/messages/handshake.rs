@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use miette::{miette, Report};
 use serde::{Deserialize, Serialize};
 
@@ -6,11 +8,17 @@ use crate::messages::WebSocketMessage;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Copy, Eq, PartialEq, Hash)]
 #[repr(transparent)]
-pub struct WorkerID(i64);
+pub struct WorkerID(u32);
+
+impl Display for WorkerID {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#08x}", self.0)
+    }
+}
 
 impl WorkerID {
     pub fn generate() -> Self {
-        let random_worker_id: i64 = rand::random();
+        let random_worker_id = rand::random();
 
         Self(random_worker_id)
     }
@@ -55,13 +63,22 @@ impl TryFrom<WebSocketMessage> for MasterHandshakeRequest {
 
 
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkerHandshakeType {
     #[serde(rename = "first-connection")]
     FirstConnection,
 
     #[serde(rename = "reconnecting")]
     Reconnecting,
+}
+
+impl Display for WorkerHandshakeType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerHandshakeType::FirstConnection => write!(f, "first-connection"),
+            WorkerHandshakeType::Reconnecting => write!(f, "reconnecting"),
+        }
+    }
 }
 
 

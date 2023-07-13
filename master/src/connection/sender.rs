@@ -2,17 +2,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures_util::stream::SplitSink;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::{OutgoingMessage, SenderHandle};
-use shared::worker_logger::WorkerLogger;
-use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
-use tracing::trace;
+
+use crate::cluster::ReconnectableClientConnection;
+use crate::connection::worker_logger::WorkerLogger;
 
 pub struct WorkerSender {
     sender_channel: Arc<UnboundedSender<OutgoingMessage>>,
@@ -22,18 +19,19 @@ pub struct WorkerSender {
 
 impl WorkerSender {
     pub fn new(
-        websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
-        global_cancellation_token: CancellationToken,
-        logger: Arc<WorkerLogger>,
+        connection: Arc<ReconnectableClientConnection>,
+        cancellation_token: CancellationToken,
+        logger: WorkerLogger,
     ) -> Self {
+        // TODO Update to use reconnectable connection
         let (message_send_queue_tx, message_send_queue_rx) =
             futures_channel::mpsc::unbounded::<OutgoingMessage>();
 
         let join_handle = tokio::spawn(Self::run(
-            logger,
-            websocket_sink,
+            connection,
             message_send_queue_rx,
-            global_cancellation_token,
+            logger,
+            cancellation_token,
         ));
 
         Self {
@@ -55,13 +53,13 @@ impl WorkerSender {
      */
 
     async fn run(
-        logger: Arc<WorkerLogger>,
-        mut websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
+        connection: Arc<ReconnectableClientConnection>,
         mut message_send_queue_receiver: UnboundedReceiver<OutgoingMessage>,
+        logger: WorkerLogger,
         global_cancellation_token: CancellationToken,
     ) -> Result<()> {
         logger.debug(
-            "Running task loop: forwarding messages from channel through WebSocket connection.",
+            "Starting task loop: forwarding messages from outgoing queue through WebSocket connection.",
         );
 
         loop {
@@ -72,7 +70,7 @@ impl WorkerSender {
             .await;
 
             if global_cancellation_token.is_cancelled() {
-                logger.trace("Stopping outgoing messages sender (cluster stopping).");
+                logger.debug("Stopping outgoing message sender.");
                 break;
             }
 
@@ -80,18 +78,24 @@ impl WorkerSender {
                 let outgoing_message = outgoing_message
                     .ok_or_else(|| miette!("Can't get outgoing message from channel!"))?;
 
-                trace!(
-                    "Sending message: id={}",
-                    outgoing_message.id.as_u64()
-                );
+                logger.trace(format!(
+                    "Sending message with ID {}.",
+                    outgoing_message.id.as_u64(),
+                ));
 
-                websocket_sink
-                    .send(outgoing_message.message)
+                connection
+                    .send_message(outgoing_message.message)
                     .await
-                    .into_diagnostic()
-                    .wrap_err_with(|| miette!("Could not send message, WebSocket sink failed."))?;
+                    .wrap_err_with(|| {
+                        miette!("Could not send message, reconnectable connection failed.")
+                    })?;
 
                 let _ = outgoing_message.oneshot_sender.send(());
+
+                logger.trace(format!(
+                    "Message with ID {} sent.",
+                    outgoing_message.id.as_u64(),
+                ));
             }
         }
 

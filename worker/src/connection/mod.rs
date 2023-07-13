@@ -30,7 +30,7 @@ use shared::messages::queue::{
 use shared::messages::traits::IntoWebSocketMessage;
 use shared::messages::{receive_exact_message_from_stream, SenderHandle};
 use shared::results::worker_trace::WorkerTraceBuilder;
-use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
+use shared::websockets::{WebSocketConnectionStatus, DEFAULT_WEBSOCKET_CONFIG};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{client_async_with_config, WebSocketStream};
@@ -43,11 +43,6 @@ use crate::rendering::runner::BlenderJobRunner;
 
 const TRACE_EVERY_NTH_PING: usize = 8;
 
-#[derive(Eq, PartialEq, Hash)]
-pub enum WebSocketConnectionStatus {
-    Reconnecting,
-    Connected,
-}
 
 pub struct ReconnectingWebSocketClient {
     server_url: String,
@@ -117,7 +112,7 @@ impl ReconnectingWebSocketClient {
                 let locked_status = self.connection_status.lock().await;
 
                 if *locked_status == WebSocketConnectionStatus::Reconnecting {
-                    debug!("Currently reconnecting, waiting 50ms before retrying receive.");
+                    debug!("Currently reconnecting, waiting 50 ms before retrying receive.");
                     drop(locked_status);
 
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -151,7 +146,10 @@ impl ReconnectingWebSocketClient {
             };
         }
 
-        unreachable!();
+        Err(miette!(
+            "Failed to receive message after {} reconnection retries.",
+            retries
+        ))
     }
 
     pub async fn send_message(&self, message: Message) -> Result<()> {
@@ -162,7 +160,7 @@ impl ReconnectingWebSocketClient {
                 let locked_status = self.connection_status.lock().await;
 
                 if *locked_status == WebSocketConnectionStatus::Reconnecting {
-                    debug!("Currently reconnecting, waiting 50ms before retrying send.");
+                    debug!("Currently reconnecting, waiting 50 ms before retrying send.");
                     drop(locked_status);
 
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -194,7 +192,10 @@ impl ReconnectingWebSocketClient {
             };
         }
 
-        unreachable!();
+        Err(miette!(
+            "Failed to send message after {} reconnection retries.",
+            retries
+        ))
     }
 
     /*

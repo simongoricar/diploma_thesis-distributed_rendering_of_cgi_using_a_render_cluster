@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -6,6 +5,7 @@ use std::time::Instant;
 use miette::miette;
 use miette::Result;
 use shared::jobs::BlenderJob;
+use shared::messages::handshake::WorkerID;
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 pub enum FrameStatusOnWorker {
@@ -21,14 +21,14 @@ pub struct FrameOnWorker {
     pub frame_index: usize,
 
     pub status: FrameStatusOnWorker,
-    
+
     pub queued_at: Instant,
-    
-    pub stolen_from: Option<SocketAddr>,
+
+    pub stolen_from: Option<WorkerID>,
 }
 
 impl FrameOnWorker {
-    pub fn new_queued(job: BlenderJob, frame_index: usize, stolen_from: Option<SocketAddr>) -> Self {
+    pub fn new_queued(job: BlenderJob, frame_index: usize, stolen_from: Option<WorkerID>) -> Self {
         Self {
             job,
             frame_index,

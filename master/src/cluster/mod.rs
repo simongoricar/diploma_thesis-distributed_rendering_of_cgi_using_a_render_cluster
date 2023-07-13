@@ -1,16 +1,35 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use atomic::Atomic;
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
 use miette::Result;
 use miette::{miette, Context, IntoDiagnostic};
 use shared::cancellation::CancellationToken;
 use shared::jobs::{BlenderJob, DistributionStrategy};
+use shared::messages::handshake::{
+    MasterHandshakeAcknowledgement,
+    MasterHandshakeRequest,
+    WorkerHandshakeResponse,
+    WorkerHandshakeType,
+    WorkerID,
+};
 use shared::messages::job::MasterJobStartedEvent;
+use shared::messages::receive_exact_message_from_stream;
+use shared::messages::traits::IntoWebSocketMessage;
 use shared::results::master_trace::MasterTrace;
 use shared::results::worker_trace::WorkerTrace;
+use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{error, info, trace};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{accept_async_with_config, WebSocketStream};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::cluster::state::ClusterManagerState;
 use crate::cluster::strategies::{
@@ -23,6 +42,397 @@ use crate::connection::Worker;
 pub mod state;
 pub mod strategies;
 
+#[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
+pub enum ClientConnectionStatus {
+    Disconnected,
+    Connected { address: SocketAddr },
+}
+
+impl ClientConnectionStatus {
+    pub fn address(&self) -> Option<SocketAddr> {
+        match self {
+            ClientConnectionStatus::Disconnected => None,
+            ClientConnectionStatus::Connected { address } => Some(*address),
+        }
+    }
+}
+
+
+pub struct ReconnectableClientConnection {
+    pub worker_id: WorkerID,
+
+    pub connection_status: Atomic<ClientConnectionStatus>,
+
+    websocket_sink: Arc<Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
+    websocket_stream: Arc<Mutex<SplitStream<WebSocketStream<TcpStream>>>>,
+}
+
+impl ReconnectableClientConnection {
+    pub fn new(
+        worker_id: WorkerID,
+        websocket_connection: WebSocketStream<TcpStream>,
+        address: SocketAddr,
+    ) -> Self {
+        let (ws_sink, ws_stream) = websocket_connection.split();
+
+        let ws_sink_arc_mutex = Arc::new(Mutex::new(ws_sink));
+        let ws_stream_arc_mutex = Arc::new(Mutex::new(ws_stream));
+
+        Self {
+            worker_id,
+            connection_status: Atomic::new(ClientConnectionStatus::Connected { address }),
+            websocket_sink: ws_sink_arc_mutex,
+            websocket_stream: ws_stream_arc_mutex,
+        }
+    }
+
+    pub async fn replace_inner_connection(
+        &self,
+        websocket_connection: WebSocketStream<TcpStream>,
+        new_address: SocketAddr,
+    ) {
+        self.connection_status.store(
+            ClientConnectionStatus::Disconnected,
+            Ordering::SeqCst,
+        );
+
+
+        let (ws_sink, ws_stream) = websocket_connection.split();
+
+        {
+            let mut locked_sink = self.websocket_sink.lock().await;
+            let mut locked_stream = self.websocket_stream.lock().await;
+
+            *locked_sink = ws_sink;
+            *locked_stream = ws_stream;
+
+            self.connection_status.store(
+                ClientConnectionStatus::Connected {
+                    address: new_address,
+                },
+                Ordering::SeqCst,
+            );
+        }
+    }
+
+    pub async fn receive_message(&self) -> Result<Message> {
+        loop {
+            {
+                let connection_status = self.connection_status.load(Ordering::SeqCst);
+                if connection_status == ClientConnectionStatus::Disconnected {
+                    trace!(
+                        worker_id = %self.worker_id,
+                        "Currently reconnecting, waiting 100 ms before retrying receive from worker."
+                    );
+
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+
+                    continue;
+                }
+            }
+
+            let mut locked_stream = self.websocket_stream.lock().await;
+
+            return match locked_stream.next().await {
+                Some(message) => match message {
+                    Ok(message) => Ok(message),
+                    Err(error) => {
+                        error!(
+                            worker_id = %self.worker_id,
+                            error = ?error,
+                            "Could not receive message from WebSocket stream, will wait for reconnect."
+                        );
+
+                        drop(locked_stream);
+
+                        continue;
+                    }
+                },
+                None => Err(miette!(
+                    "No next message in the WebSocket stream."
+                )),
+            };
+        }
+    }
+
+    pub async fn send_message(&self, message: Message) -> Result<()> {
+        loop {
+            {
+                let connection_status = self.connection_status.load(Ordering::SeqCst);
+                if connection_status == ClientConnectionStatus::Disconnected {
+                    debug!("Currently reconnecting, waiting 100 ms before retrying send.");
+
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+
+                    continue;
+                }
+            }
+
+            let mut locked_sink = self.websocket_sink.lock().await;
+
+            return match locked_sink.send(message.clone()).await {
+                Ok(_) => Ok(()),
+                Err(error) => {
+                    error!(
+                        worker_id = %self.worker_id,
+                        error = ?error,
+                        "Could not send message through WebSocket stream, will wait for reconnect."
+                    );
+
+                    drop(locked_sink);
+
+                    continue;
+                }
+            };
+        }
+    }
+
+    pub fn address(&self) -> Option<SocketAddr> {
+        match self.connection_status.load(Ordering::SeqCst) {
+            ClientConnectionStatus::Disconnected => None,
+            ClientConnectionStatus::Connected { address } => Some(address),
+        }
+    }
+}
+
+
+pub struct ReconnectingWebSocketServer {
+    pub connections: Arc<Mutex<HashMap<WorkerID, Arc<ReconnectableClientConnection>>>>,
+
+    pub acceptor_join_handle: JoinHandle<Result<()>>,
+}
+
+impl ReconnectingWebSocketServer {
+    pub async fn new(
+        listener: TcpListener,
+        cancellation_token: CancellationToken,
+        cluster_state: Arc<ClusterManagerState>,
+    ) -> Self {
+        let worker_map = Arc::new(Mutex::new(HashMap::new()));
+
+        let acceptor_join_handle = tokio::spawn(Self::indefinitely_accept_connections(
+            listener,
+            worker_map.clone(),
+            cluster_state,
+            cancellation_token,
+        ));
+
+        Self {
+            connections: worker_map,
+            acceptor_join_handle,
+        }
+    }
+
+    async fn indefinitely_accept_connections(
+        listener: TcpListener,
+        connection_map: Arc<Mutex<HashMap<WorkerID, Arc<ReconnectableClientConnection>>>>,
+        cluster_state: Arc<ClusterManagerState>,
+        cancellation_token: CancellationToken,
+    ) -> Result<()> {
+        loop {
+            if let Ok(new_tcp_connection) =
+                tokio::time::timeout(Duration::from_secs(2), listener.accept()).await
+            {
+                let (tcp_stream, worker_address) = new_tcp_connection
+                    .into_diagnostic()
+                    .wrap_err_with(|| miette!("Could not accept incoming connection."))?;
+
+                debug!(
+                    address = %worker_address,
+                    "Accepted new TCP connection, spawning task to perform handshake."
+                );
+
+                tokio::spawn(Self::initialize_worker_connection(
+                    worker_address,
+                    tcp_stream,
+                    connection_map.clone(),
+                    cluster_state.clone(),
+                    cancellation_token.clone(),
+                ));
+            }
+
+            if cancellation_token.is_cancelled() {
+                info!("Cancellation token set, waiting for all worker connections to drop.");
+
+                {
+                    let mut locked_workers = cluster_state.workers.lock().await;
+                    for (_, worker) in locked_workers.drain() {
+                        if let Some(address) = worker.connection.address() {
+                            debug!(
+                                worker_id = %worker.id,
+                                address = %address,
+                                "Calling .join() on worker.",
+                            );
+                        } else {
+                            warn!(
+                                worker_id = %worker.id,
+                                "Calling .join() on disconnected worker."
+                            );
+                        }
+                    }
+                }
+
+                info!("Stopping worker connection accepting task.");
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn initialize_worker_connection(
+        address: SocketAddr,
+        tcp_stream: TcpStream,
+        worker_map: Arc<Mutex<HashMap<WorkerID, Arc<ReconnectableClientConnection>>>>,
+        cluster_state: Arc<ClusterManagerState>,
+        cancellation_token: CancellationToken,
+    ) -> Result<()> {
+        // Perform the WebSocket protocol handshake.
+        let mut ws_stream = accept_async_with_config(tcp_stream, Some(DEFAULT_WEBSOCKET_CONFIG))
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| {
+                miette!(
+                    "Failed to accept TcpStream as WebSocket stream (protocol handshake failed)."
+                )
+            })?;
+
+        info!(
+            worker_address = %address,
+            "New WebSocket connection accepted (protocol handshake OK)."
+        );
+
+
+        // Perform our internal handshake over the given WebSocket.
+        // This handshake consists of three messages:
+        //  1. The master server must send a "handshake request".
+        //  2. The worker must respond with a "handshake response".
+        //  3. The master server must confirm with a "handshake response acknowledgement".
+        //
+        // After these three steps, the connection is considered to be established.
+        let handshake_request = MasterHandshakeRequest::new("1.0.0")
+            .into_ws_message()
+            .to_tungstenite_message()?;
+
+        ws_stream
+            .send(handshake_request)
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Failed to send handshake request."))?;
+
+        info!(
+            worker_address = %address,
+            "Sent handshake request to worker."
+        );
+
+
+        let handshake_response: WorkerHandshakeResponse =
+            receive_exact_message_from_stream(&mut ws_stream)
+                .await
+                .wrap_err_with(|| miette!("Failed to receive handshake response from worker."))?;
+
+        info!(
+            worker_address = %address,
+            worker_id = %handshake_response.worker_id,
+            handshake_type = %handshake_response.handshake_type,
+            "Received handshake response from worker."
+        );
+
+        // If the worker is reconnecting, we must already have it in our worker map,
+        // otherwise something went *really* wrong.
+        let is_ok = if handshake_response.handshake_type == WorkerHandshakeType::Reconnecting {
+            let locked_worker_map = worker_map.lock().await;
+
+            locked_worker_map.contains_key(&handshake_response.worker_id)
+        } else {
+            true
+        };
+
+
+        let handshake_ack = MasterHandshakeAcknowledgement::new(is_ok)
+            .into_ws_message()
+            .to_tungstenite_message()?;
+
+        ws_stream
+            .send(handshake_ack)
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Failed to send handshake ack."))?;
+
+        info!(
+            worker_address = %address,
+            worker_id = %handshake_response.worker_id,
+            "Sent handshake acknowledgement to worker."
+        );
+
+
+        // Both the WebSocket and our internal handshake has completed at this point.
+        // If the worker is reconnecting, we need to get our existing reconnectable connection and
+        // replace its inner WebSocket stream, otherwise we simply instantiate a new one and put it
+        // into the map.
+
+        match handshake_response.handshake_type {
+            WorkerHandshakeType::FirstConnection => {
+                let connection_arc = {
+                    let mut locked_connection_map = worker_map.lock().await;
+
+                    let connection = ReconnectableClientConnection::new(
+                        handshake_response.worker_id,
+                        ws_stream,
+                        address,
+                    );
+                    let connection_arc = Arc::new(connection);
+
+                    locked_connection_map.insert(
+                        handshake_response.worker_id,
+                        connection_arc.clone(),
+                    );
+
+                    connection_arc
+                };
+
+                info!("Initial connection successful.");
+
+                let heartbeat_cancellation_token = CancellationToken::new();
+                let worker = Worker::initialize_from_handshaked_connection(
+                    connection_arc,
+                    cluster_state.clone(),
+                    heartbeat_cancellation_token,
+                    cancellation_token.clone(),
+                )
+                .await
+                .wrap_err_with(|| miette!("Failed to set up worker."))?;
+
+                {
+                    let mut locked_worker_map = cluster_state.workers.lock().await;
+                    locked_worker_map.insert(worker.id, worker);
+                }
+            }
+            WorkerHandshakeType::Reconnecting => {
+                let locked_worker_map = worker_map.lock().await;
+
+                let existing_connection = locked_worker_map
+                    .get(&handshake_response.worker_id)
+                    .ok_or_else(|| {
+                        miette!(
+                            "BUG: Existing connection doesn't exist, even though we just checked."
+                        )
+                    })?;
+
+                existing_connection
+                    .replace_inner_connection(ws_stream, address)
+                    .await;
+
+                // No need to update worker map, the Worker implementation
+                // already uses an Arc-ed connection so the underlying connection
+                // will be swapped out automatically.
+            }
+        };
+
+        Ok(())
+    }
+}
+
 
 pub struct ClusterManager {}
 
@@ -31,7 +441,7 @@ impl ClusterManager {
         host: &str,
         port: usize,
         job: BlenderJob,
-    ) -> Result<(MasterTrace, Vec<(SocketAddr, WorkerTrace)>)> {
+    ) -> Result<(MasterTrace, Vec<(String, WorkerTrace)>)> {
         let shared_state = Arc::new(ClusterManagerState::new_from_job(job.clone()));
         let cancellation_token = CancellationToken::new();
 
@@ -39,24 +449,21 @@ impl ClusterManager {
             .await
             .into_diagnostic()?;
 
-        // Initialize two futures: one that accepts incoming worker connections
-        // and another that waits for correct amount of workers and performs the job.
-        let worker_connection_acceptor_future = Self::indefinitely_accept_connections(
+        let reconnecting_server = ReconnectingWebSocketServer::new(
             server_socket,
-            shared_state.clone(),
             cancellation_token.clone(),
-        );
+            shared_state.clone(),
+        )
+        .await;
 
-        let job_processing_future = Self::wait_for_workers_and_run_job(job, shared_state.clone());
+        let master_trace = Self::wait_for_workers_and_run_job(job, shared_state.clone())
+            .await
+            .wrap_err_with(|| miette!("Failed to wait for workers and run job."))?;
 
-        // Spawn the acceptor in the background and wait for the job runner to complete first.
-        let worker_connection_acceptor_handle = tokio::spawn(worker_connection_acceptor_future);
-        let master_trace = job_processing_future.await?;
+        info!("Job finished, requesting performance traces from all workers.");
 
-        // Request performance traces from workers. Shortly after the workers respond with those,
-        // they will shut themselves down.
-        info!("Job finished, requesting performance traces from all workers...");
-        let mut worker_traces: Vec<(SocketAddr, WorkerTrace)> = Vec::new();
+        // TODO Add tracing for reconnection events (on the worker side)
+        let mut worker_traces: Vec<(String, WorkerTrace)> = Vec::new();
         {
             let locked_workers = shared_state.workers.lock().await;
 
@@ -71,94 +478,32 @@ impl ClusterManager {
                     .wrap_err_with(|| {
                         miette!(
                             "Could not receive trace from worker {:?}!",
-                            worker.address
+                            worker.id
                         )
                     })?;
 
-                worker_traces.push((worker.address, worker_trace));
+                let address_string = match worker.connection.address() {
+                    Some(address) => address.to_string(),
+                    None => String::from("unknown"),
+                };
+
+                worker_traces.push((
+                    format!("{}-{}", worker.id, address_string,),
+                    worker_trace,
+                ));
             }
         }
 
-        trace!("Setting cancellation token...");
+        trace!("Setting global cancellation token to true.");
         cancellation_token.cancel();
 
-        trace!("Waiting for worker connection acceptor...");
-        worker_connection_acceptor_handle
+        trace!("Waiting for worker connection acceptor to stop.");
+        reconnecting_server
+            .acceptor_join_handle
             .await
             .into_diagnostic()??;
 
         Ok((master_trace, worker_traces))
-    }
-
-    async fn indefinitely_accept_connections(
-        server_socket: TcpListener,
-        state: Arc<ClusterManagerState>,
-        cancellation_token: CancellationToken,
-    ) -> Result<()> {
-        loop {
-            if let Ok(incoming_connection) =
-                tokio::time::timeout(Duration::from_secs(2), server_socket.accept()).await
-            {
-                let (stream, address) = incoming_connection
-                    .into_diagnostic()
-                    .wrap_err_with(|| miette!("Could not accept incoming connection."))?;
-
-                tokio::spawn(Self::accept_worker(
-                    state.clone(),
-                    address,
-                    stream,
-                    cancellation_token.clone(),
-                ));
-            }
-
-            if cancellation_token.is_cancelled() {
-                info!("Waiting for all worker connections to drop (cluster stopping).");
-                {
-                    let mut locked_workers = state.workers.lock().await;
-                    for (address, worker) in locked_workers.drain() {
-                        trace!(
-                            "Joining worker: \"{}:{}\"",
-                            address.ip(),
-                            address.port()
-                        );
-                        worker.join().await?;
-                    }
-                }
-
-                info!("Stopping worker connection acceptor (cluster stopping).");
-                break;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn accept_worker(
-        state: Arc<ClusterManagerState>,
-        address: SocketAddr,
-        tcp_stream: TcpStream,
-        cancellation_token: CancellationToken,
-    ) -> Result<()> {
-        let heartbeat_cancellation_token = CancellationToken::new();
-
-        // TODO What happens when the worker disconnects?
-        let worker = Worker::new_with_accept_and_handshake(
-            tcp_stream,
-            address,
-            state.clone(),
-            heartbeat_cancellation_token,
-            cancellation_token,
-        )
-        .await
-        .wrap_err_with(|| miette!("Could not create worker."))?;
-
-        // Put the just-accepted client into the client map.
-        {
-            let workers_locked = &mut state.workers.lock().await;
-            workers_locked.insert(address, worker);
-        }
-
-        Ok(())
     }
 
     async fn wait_for_workers_and_run_job(
@@ -215,13 +560,14 @@ impl ClusterManager {
                     .wrap_err_with(|| {
                         miette!(
                             "Could not send job started event to worker {:?}",
-                            worker.address
+                            worker.id
                         )
                     })?;
             }
         }
 
         // FIXME If a client connects after a job has started, they will not receive the job start event.
+        // FIXME Disallow initial handshakes after a job has started, only reconnections.
 
         /*
          * Run the Blender job to completion.

@@ -2,18 +2,17 @@ pub mod queue;
 pub mod receiver;
 pub mod requester;
 pub mod sender;
+pub mod worker_logger;
 
 
-use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::jobs::BlenderJob;
-use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshakeRequest};
+use shared::messages::handshake::WorkerID;
 use shared::messages::heartbeat::MasterHeartbeatRequest;
 use shared::messages::queue::{
     FrameQueueAddResult,
@@ -22,15 +21,13 @@ use shared::messages::queue::{
     WorkerFrameQueueItemRenderingEvent,
 };
 use shared::messages::SenderHandle;
-use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
-use shared::worker_logger::WorkerLogger;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
-use tokio_tungstenite::accept_async_with_config;
 use tracing::debug;
+use worker_logger::WorkerLogger;
 
 use crate::cluster::state::ClusterManagerState;
+use crate::cluster::ReconnectableClientConnection;
 use crate::connection::queue::{FrameOnWorker, WorkerQueue};
 use crate::connection::receiver::WorkerReceiver;
 use crate::connection::requester::WorkerRequester;
@@ -39,25 +36,20 @@ use crate::connection::sender::WorkerSender;
 const HEARTBEAT_TASK_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
-/// State of the WebSocket connection with the worker.
-pub enum WorkerConnectionState {
-    PendingHandshake,
-    Connected,
-}
+// TODO Implement swappable client websocket that is then passed to the Worker
+//      and which the senders and receiver use instead of the raw websocket.
+
 
 /// Worker abstraction from the viewpoint of the master server.
 pub struct Worker {
-    /// IP address and port of the worker.
-    pub address: SocketAddr,
+    pub id: WorkerID,
 
-    /// Logger instance (so we can display logs with IP address, port and other context).
-    pub logger: Arc<WorkerLogger>,
+    pub logger: WorkerLogger,
 
-    /// Reference to the `ClusterManager`'s state.
+    /// Reference to the `ClusterManager` state.
     pub cluster_state: Arc<ClusterManagerState>,
 
-    /// Status of the WebSocket connection with the worker.
-    pub connection_state: WorkerConnectionState,
+    pub connection: Arc<ReconnectableClientConnection>,
 
     pub sender: WorkerSender,
 
@@ -83,38 +75,40 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// Given an established incoming `TcpStream`, turn the connection into
-    /// a WebSocket connection, perform our internal handshake and spawn tasks to run the connection
-    /// with this client and handle messages.
-    pub async fn new_with_accept_and_handshake(
-        stream: TcpStream,
-        address: SocketAddr,
+    /// Given an established incoming WebSocket connection that has already established a handshake,
+    /// spawn tasks to run the connection with this client and handle incoming messages.
+    pub async fn initialize_from_handshaked_connection(
+        connection: Arc<ReconnectableClientConnection>,
         cluster_state: Arc<ClusterManagerState>,
         heartbeat_cancellation_token: CancellationToken,
         cluster_cancellation_token: CancellationToken,
     ) -> Result<Self> {
-        let (queue, queue_size) = WorkerQueue::new();
-        let queue = Arc::new(Mutex::new(queue));
+        let worker_id = connection.worker_id;
+        let logger = WorkerLogger::new(connection.clone());
 
-        let (logger, sender, receiver, requester, connection_tasks) =
+        let (queue, queue_size) = WorkerQueue::new();
+        let queue_arc = Arc::new(Mutex::new(queue));
+
+        let (sender, receiver, requester, connection_tasks) =
             Self::accept_ws_stream_and_initialize_tasks(
-                stream,
-                queue.clone(),
+                connection.clone(),
+                queue_arc.clone(),
                 cluster_state.clone(),
+                logger.clone(),
                 heartbeat_cancellation_token.clone(),
                 cluster_cancellation_token.clone(),
             )
             .await?;
 
         Ok(Self {
-            address,
+            id: worker_id,
             logger,
             cluster_state,
-            connection_state: WorkerConnectionState::Connected,
+            connection,
             sender,
             receiver,
             requester,
-            queue,
+            queue: queue_arc,
             queue_size,
             connection_tasks,
             heartbeat_cancellation_token,
@@ -151,7 +145,7 @@ impl Worker {
         &self,
         job: BlenderJob,
         frame_index: usize,
-        stolen_from: Option<SocketAddr>,
+        stolen_from: Option<WorkerID>,
     ) -> Result<()> {
         let add_result = self
             .requester
@@ -198,56 +192,38 @@ impl Worker {
     /// Given a `TcpStream`, turn it into a proper WebSocket connection, perform the initial handshake
     /// and spawn tasks to run this connection, including handling incoming requests/responses/events.
     async fn accept_ws_stream_and_initialize_tasks(
-        stream: TcpStream,
+        connection: Arc<ReconnectableClientConnection>,
         worker_queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
+        logger: WorkerLogger,
         heartbeat_cancellation_token: CancellationToken,
         cluster_cancellation_token: CancellationToken,
     ) -> Result<(
-        Arc<WorkerLogger>,
         WorkerSender,
         Arc<WorkerReceiver>,
         Arc<WorkerRequester>,
         JoinSet<Result<()>>,
     )> {
-        // Initialize logger that will be distributed across this worker instance.
-        let address = stream.peer_addr().into_diagnostic()?;
-        let logger = Arc::new(WorkerLogger::new(format!(
-            "{}:{}",
-            address.ip(),
-            address.port()
-        )));
-
-        // Upgrades TcpStream to a WebSocket connection.
-        logger.debug("Accepting TcpStream.");
-        let ws_stream = accept_async_with_config(stream, Some(DEFAULT_WEBSOCKET_CONFIG))
-            .await
-            .into_diagnostic()
-            .wrap_err_with(|| miette!("Could not accept TcpStream."))?;
-        logger.debug("TcpStream accepted.");
-
-        // Splits the stream and initializes unbounded message channels.
-
-        let (ws_sink, ws_stream) = ws_stream.split();
-
-        // The multiple async tasks that run this connection live on this `JoinSet`.
-        // Use this `JoinSet` to cancel or join all of the worker tasks.
-        let mut worker_connection_future_set: JoinSet<Result<()>> = JoinSet::new();
-
-        let receiver = WorkerReceiver::new(ws_stream, cluster_cancellation_token.clone());
+        let receiver = WorkerReceiver::new(
+            connection.clone(),
+            logger.clone(),
+            cluster_cancellation_token.clone(),
+        );
         let receiver_arc = Arc::new(receiver);
 
         let sender = WorkerSender::new(
-            ws_sink,
+            connection.clone(),
             cluster_cancellation_token.clone(),
             logger.clone(),
         );
 
-        // Perform our internal WebSocket handshake that exchanges, among other things, server and worker versions.
-        Self::perform_handshake(logger.clone(), &sender, receiver_arc.clone()).await?;
-
         let requester = WorkerRequester::new(sender.sender_handle(), receiver_arc.clone());
         let requester_arc = Arc::new(requester);
+
+
+        // The multiple async tasks that run this connection live on this `JoinSet`.
+        // Use this `JoinSet` to cancel or join all of the worker tasks.
+        let mut worker_connection_future_set: JoinSet<Result<()>> = JoinSet::new();
 
         // Finally, spawn two final tasks:
         // - one that maintains the heartbeat with the worker (it sends a heartbeat request every ~10 seconds and waits for the response) and
@@ -262,7 +238,7 @@ impl Worker {
         ));
 
         worker_connection_future_set.spawn(Self::manage_incoming_messages(
-            address,
+            connection.worker_id,
             worker_queue,
             logger.clone(),
             receiver_arc.clone(),
@@ -272,8 +248,8 @@ impl Worker {
 
         logger.info("Connection fully established.");
 
+
         Ok((
-            logger,
             sender,
             receiver_arc,
             requester_arc,
@@ -281,50 +257,12 @@ impl Worker {
         ))
     }
 
-    /// Perform our internal handshake over the given WebSocket.
-    /// This handshake consists of three messages:
-    ///  1. The master server must send a "handshake request".
-    ///  2. The worker must respond with a "handshake response".
-    ///  3. The master server must confirm with a "handshake response acknowledgement".
-    ///
-    /// After these three steps, the connection is considered to be established.
-    async fn perform_handshake(
-        logger: Arc<WorkerLogger>,
-        sender: &WorkerSender,
-        receiver: Arc<WorkerReceiver>,
-    ) -> Result<()> {
-        let sender_handle = sender.sender_handle();
-
-        logger.debug("Sending handshake request.");
-        sender_handle
-            .send_message(MasterHandshakeRequest::new("1.0.0"))
-            .await?;
-
-        let handshake_response = receiver
-            .wait_for_handshake_response(None)
-            .await
-            .wrap_err_with(|| miette!("Failed to receive handshake response."))?;
-
-        logger.info(format!(
-            "Got handshake response. worker_version={}, sending acknowledgement.",
-            handshake_response.worker_version,
-        ));
-
-        sender_handle
-            .send_message(MasterHandshakeAcknowledgement::new(true))
-            .await?;
-
-        logger.info("Handshake has been successfully completed.");
-
-        Ok(())
-    }
-
     /// Waits for incoming messages and reacts according to their contents
     /// (e.g. a "frame finished" event will update our internal queue to reflect that).
     async fn manage_incoming_messages(
-        worker_address: SocketAddr,
+        worker_id: WorkerID,
         worker_queue: Arc<Mutex<WorkerQueue>>,
-        logger: Arc<WorkerLogger>,
+        logger: WorkerLogger,
         receiver: Arc<WorkerReceiver>,
         cluster_state: Arc<ClusterManagerState>,
         cluster_cancellation_token: CancellationToken,
@@ -347,7 +285,7 @@ impl Worker {
                     Self::mark_frame_as_rendering(
                         rendering_event.job_name,
                         rendering_event.frame_index,
-                        worker_address,
+                        worker_id,
                         logger.clone(),
                         worker_queue.clone(),
                         cluster_state.clone(),
@@ -387,7 +325,7 @@ impl Worker {
     /// Runs as long as the async sender channel can be written to
     /// or until the worker doesn't respond to a heartbeat.
     async fn maintain_heartbeat(
-        logger: Arc<WorkerLogger>,
+        logger: WorkerLogger,
         event_dispatcher: Arc<WorkerReceiver>,
         sender_handle: SenderHandle,
         heartbeat_cancellation_token: CancellationToken,
@@ -405,7 +343,7 @@ impl Worker {
                 break;
             }
             if cluster_cancellation_token.is_cancelled() {
-                logger.trace("Stopping heartbeat task (cluster stopping).");
+                logger.trace("Stopping heartbeat task (cluster cancelled).");
                 break;
             }
 
@@ -443,8 +381,8 @@ impl Worker {
     async fn mark_frame_as_rendering(
         job_name: String,
         frame_index: usize,
-        worker_address: SocketAddr,
-        logger: Arc<WorkerLogger>,
+        worker_id: WorkerID,
+        logger: WorkerLogger,
         worker_queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
     ) -> Result<()> {
@@ -456,7 +394,7 @@ impl Worker {
 
         logger.trace("Marking frame as rendering in master's full state.");
         cluster_state
-            .mark_frame_as_rendering_on_worker(worker_address, frame_index)
+            .mark_frame_as_rendering_on_worker(worker_id, frame_index)
             .await?;
 
         Ok(())
@@ -467,7 +405,7 @@ impl Worker {
     async fn mark_frame_as_finished(
         job_name: String,
         frame_index: usize,
-        logger: Arc<WorkerLogger>,
+        logger: WorkerLogger,
         worker_queue: Arc<Mutex<WorkerQueue>>,
         cluster_state: Arc<ClusterManagerState>,
     ) -> Result<()> {

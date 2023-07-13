@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::time::Instant;
 
 use miette::miette;
 use miette::Result;
 use shared::jobs::BlenderJob;
+use shared::messages::handshake::WorkerID;
 use tokio::sync::Mutex;
 
 use crate::connection::Worker;
@@ -13,12 +13,12 @@ use crate::connection::Worker;
 pub enum FrameStatus {
     Pending,
     QueuedOnWorker {
-        worker: SocketAddr,
+        worker_id: WorkerID,
         queued_at: Instant,
-        stolen_from: Option<SocketAddr>,
+        stolen_from: Option<WorkerID>,
     },
     RenderingOnWorker {
-        worker: SocketAddr,
+        worker_id: WorkerID,
     },
     Finished,
 }
@@ -41,7 +41,8 @@ impl BlenderJobFrame {
 
 
 pub struct ClusterManagerState {
-    pub workers: Mutex<HashMap<SocketAddr, Worker>>,
+    pub workers: Mutex<HashMap<WorkerID, Worker>>,
+
     pub job_frames: Mutex<Vec<BlenderJobFrame>>,
 }
 
@@ -80,9 +81,9 @@ impl ClusterManagerState {
 
     pub async fn mark_frame_as_queued_on_worker(
         &self,
-        worker_address: SocketAddr,
+        worker_id: WorkerID,
         frame_index: usize,
-        stolen_from: Option<SocketAddr>,
+        stolen_from: Option<WorkerID>,
     ) -> Result<()> {
         let mut locked_frames = self.job_frames.lock().await;
 
@@ -92,7 +93,7 @@ impl ClusterManagerState {
             .ok_or_else(|| miette!("Could not find frame with given index."))?;
 
         frame.status = FrameStatus::QueuedOnWorker {
-            worker: worker_address,
+            worker_id,
             queued_at: Instant::now(),
             stolen_from,
         };
@@ -101,7 +102,7 @@ impl ClusterManagerState {
 
     pub async fn mark_frame_as_rendering_on_worker(
         &self,
-        worker_address: SocketAddr,
+        worker_id: WorkerID,
         frame_index: usize,
     ) -> Result<()> {
         let mut locked_frames = self.job_frames.lock().await;
@@ -111,9 +112,7 @@ impl ClusterManagerState {
             .find(|frame| frame.frame_index == frame_index)
             .ok_or_else(|| miette!("Could not find frame with given index."))?;
 
-        frame.status = FrameStatus::RenderingOnWorker {
-            worker: worker_address,
-        };
+        frame.status = FrameStatus::RenderingOnWorker { worker_id };
         Ok(())
     }
 

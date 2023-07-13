@@ -9,7 +9,7 @@ frame_range_to = 14400
 
 wait_for_number_of_workers = 40
 
-output_directory_path = "%BASE%/blender-projects/04_very-simple/output_14400f_40w_eager-naive-coarse"
+output_directory_path = "/d/hpc/projects/FRI/sg7710/distributed-rendering-output/output_14400f_40w_eager-naive-coarse"
 output_file_name_format = "######"
 output_file_format = "JPEG"
 

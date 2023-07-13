@@ -101,7 +101,7 @@ pub fn parse_websocket_message(message: tungstenite::Message) -> Result<Option<W
     }
 }
 
-pub async fn receive_exact_message<M: Message + TryFrom<WebSocketMessage>>(
+pub async fn receive_exact_message_from_receiver<M: Message + TryFrom<WebSocketMessage>>(
     receiver_channel: &mut UnboundedReceiver<WebSocketMessage>,
 ) -> Result<M> {
     let next_message = receiver_channel
@@ -113,6 +113,29 @@ pub async fn receive_exact_message<M: Message + TryFrom<WebSocketMessage>>(
         Ok(message)
     } else {
         Err(miette!("Unexpected incoming message type."))
+    }
+}
+
+pub async fn receive_exact_message_from_stream<
+    M: Message + TryFrom<WebSocketMessage>,
+    S: StreamExt<Item = core::result::Result<tungstenite::Message, tungstenite::error::Error>> + Unpin,
+>(
+    stream: &mut S,
+) -> Result<M> {
+    let ws_message = stream
+        .next()
+        .await
+        .ok_or_else(|| miette!("Stream is empty, can't read."))?
+        .into_diagnostic()
+        .wrap_err_with(|| miette!("Failed to receive message from WebSocket stream."))?;
+
+    let raw_message = WebSocketMessage::from_websocket_message(ws_message)
+        .wrap_err_with(|| miette!("Could not decode received WS Message as WebSocketMessage."))?;
+
+    if let Ok(expected_message) = M::try_from(raw_message) {
+        Ok(expected_message)
+    } else {
+        Err(miette!("Unexpected message type."))
     }
 }
 

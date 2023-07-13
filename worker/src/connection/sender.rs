@@ -2,16 +2,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures_util::stream::SplitSink;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::{OutgoingMessage, SenderHandle};
-use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, trace};
+
+use crate::connection::ReconnectingWebSocketClient;
 
 pub struct MasterSender {
     sender_channel: Arc<UnboundedSender<OutgoingMessage>>,
@@ -21,14 +19,14 @@ pub struct MasterSender {
 
 impl MasterSender {
     pub fn new(
-        websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
+        client: Arc<ReconnectingWebSocketClient>,
         global_cancellation_token: CancellationToken,
     ) -> Self {
         let (message_send_queue_tx, message_send_queue_rx) =
             futures_channel::mpsc::unbounded::<OutgoingMessage>();
 
         let join_handle = tokio::spawn(Self::run(
-            websocket_sink,
+            client,
             message_send_queue_rx,
             global_cancellation_token,
         ));
@@ -52,7 +50,7 @@ impl MasterSender {
      */
 
     async fn run(
-        mut websocket_sink: SplitSink<WebSocketStream<TcpStream>, Message>,
+        websocket_client: Arc<ReconnectingWebSocketClient>,
         mut message_send_queue_receiver: UnboundedReceiver<OutgoingMessage>,
         global_cancellation_token: CancellationToken,
     ) -> Result<()> {
@@ -79,11 +77,12 @@ impl MasterSender {
                     outgoing_message.id.as_u64()
                 );
 
-                websocket_sink
-                    .send(outgoing_message.message)
+                websocket_client
+                    .send_message(outgoing_message.message)
                     .await
-                    .into_diagnostic()
-                    .wrap_err_with(|| miette!("Could not send message, WebSocket sink failed."))?;
+                    .wrap_err_with(|| {
+                        miette!("Could not send message, reconnecting WebSocket client failed.")
+                    })?;
 
                 let _ = outgoing_message.oneshot_sender.send(());
             }

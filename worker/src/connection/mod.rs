@@ -5,10 +5,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use futures_util::StreamExt;
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
-use shared::messages::handshake::{MasterHandshakeRequest, WorkerHandshakeResponse};
+use shared::messages::handshake::{
+    MasterHandshakeAcknowledgement,
+    MasterHandshakeRequest,
+    WorkerHandshakeResponse,
+    WorkerID,
+};
 use shared::messages::heartbeat::WorkerHeartbeatResponse;
 use shared::messages::job::{
     MasterJobFinishedRequest,
@@ -21,13 +27,14 @@ use shared::messages::queue::{
     WorkerFrameQueueAddResponse,
     WorkerFrameQueueRemoveResponse,
 };
-use shared::messages::SenderHandle;
+use shared::messages::traits::IntoWebSocketMessage;
+use shared::messages::{receive_exact_message_from_stream, SenderHandle};
 use shared::results::worker_trace::WorkerTraceBuilder;
 use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
 use tokio::net::TcpStream;
-use tokio::sync::broadcast::Receiver;
-use tokio_tungstenite::client_async_with_config;
-use tracing::{debug, info, trace, warn};
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{client_async_with_config, WebSocketStream};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::connection::receiver::MasterReceiver;
 use crate::connection::sender::MasterSender;
@@ -35,6 +42,334 @@ use crate::rendering::queue::WorkerAutomaticQueue;
 use crate::rendering::runner::BlenderJobRunner;
 
 const TRACE_EVERY_NTH_PING: usize = 8;
+
+#[derive(Eq, PartialEq, Hash)]
+pub enum WebSocketConnectionStatus {
+    Reconnecting,
+    Connected,
+}
+
+pub struct ReconnectingWebSocketClient {
+    server_url: String,
+    backoff_max_retries: usize,
+    backoff_exp_base: f64,
+    backoff_max_seconds: f64,
+
+    max_reconnection_retries: usize,
+
+    pub worker_id: WorkerID,
+
+    pub connection_status: tokio::sync::Mutex<WebSocketConnectionStatus>,
+
+    pub websocket_sink: Arc<tokio::sync::Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
+    pub websocket_stream: Arc<tokio::sync::Mutex<SplitStream<WebSocketStream<TcpStream>>>>,
+}
+
+impl ReconnectingWebSocketClient {
+    pub async fn new_connection<S: Into<String>>(
+        server_url: S,
+        backoff_max_retries: usize,
+        backoff_exp_base: f64,
+        backoff_max_seconds: f64,
+        max_reconnection_retries: usize,
+    ) -> Result<Self> {
+        let server_url = server_url.into();
+        let worker_id = WorkerID::generate();
+
+        // TODO implement reconnecting websocket, then make sender and receiver implementations
+        //      use a reference to this, not the raw sink and stream.
+
+        let web_socket_connection = Self::connect_and_handshake(
+            &server_url,
+            backoff_max_retries,
+            backoff_exp_base,
+            backoff_max_seconds,
+            worker_id,
+            false,
+        )
+        .await?;
+
+        // We have concluded the setup at this point and need to update the connection status, then
+        // simply set the sink and stream on this instance.
+        let (ws_sink, ws_stream) = web_socket_connection.split();
+
+        let ws_sink_arc_mutex = Arc::new(tokio::sync::Mutex::new(ws_sink));
+        let ws_stream_arc_mutex = Arc::new(tokio::sync::Mutex::new(ws_stream));
+
+        Ok(Self {
+            server_url,
+            backoff_max_retries,
+            backoff_exp_base,
+            backoff_max_seconds,
+            max_reconnection_retries,
+            worker_id,
+            connection_status: tokio::sync::Mutex::new(WebSocketConnectionStatus::Connected),
+            websocket_sink: ws_sink_arc_mutex,
+            websocket_stream: ws_stream_arc_mutex,
+        })
+    }
+
+    pub async fn receive_message(&self) -> Result<Message> {
+        let mut retries: usize = 0;
+
+        while retries < self.max_reconnection_retries {
+            {
+                let locked_status = self.connection_status.lock().await;
+
+                if *locked_status == WebSocketConnectionStatus::Reconnecting {
+                    debug!("Currently reconnecting, waiting 50ms before retrying receive.");
+                    drop(locked_status);
+
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+
+                    retries += 1;
+                    continue;
+                }
+            }
+
+            let mut locked_stream = self.websocket_stream.lock().await;
+
+            return match locked_stream.next().await {
+                Some(message) => match message {
+                    Ok(message) => Ok(message),
+                    Err(error) => {
+                        error!(error = ?error, "Could not receive message from WebSocket stream, will attempt to reconnect.");
+
+                        drop(locked_stream);
+
+                        self.reconnect()
+                            .await
+                            .wrap_err_with(|| miette!("Could not reconnect to master server."))?;
+
+                        retries += 1;
+                        continue;
+                    }
+                },
+                None => Err(miette!(
+                    "No next message in the WebSocket stream."
+                )),
+            };
+        }
+
+        unreachable!();
+    }
+
+    pub async fn send_message(&self, message: Message) -> Result<()> {
+        let mut retries: usize = 0;
+
+        while retries < self.max_reconnection_retries {
+            {
+                let locked_status = self.connection_status.lock().await;
+
+                if *locked_status == WebSocketConnectionStatus::Reconnecting {
+                    debug!("Currently reconnecting, waiting 50ms before retrying send.");
+                    drop(locked_status);
+
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+
+                    retries += 1;
+                    continue;
+                }
+            }
+
+            let mut locked_sink = self.websocket_sink.lock().await;
+
+            return match locked_sink.send(message.clone()).await {
+                Ok(_) => Ok(()),
+                Err(error) => {
+                    error!(
+                        error = ?error,
+                        "Could not send message through WebSocket stream, will attempt to reconnect."
+                    );
+
+                    drop(locked_sink);
+
+                    self.reconnect()
+                        .await
+                        .wrap_err_with(|| miette!("Could not reconnect to master server."))?;
+
+                    retries += 1;
+                    continue;
+                }
+            };
+        }
+
+        unreachable!();
+    }
+
+    /*
+     * Private methods
+     */
+
+    async fn connect_and_handshake(
+        server_url: &str,
+        max_retries: usize,
+        exp_base: f64,
+        backoff_max_seconds: f64,
+        worker_id: WorkerID,
+        is_a_reconnect: bool,
+    ) -> Result<WebSocketStream<TcpStream>> {
+        // Establish TCP connection using exponential backoff if the connection cannot be made at the moment.
+        let tcp_stream = Self::establish_tcp_connection_with_exponential_backoff(
+            server_url,
+            max_retries,
+            exp_base,
+            backoff_max_seconds,
+        )
+        .await
+        .wrap_err_with(|| {
+            miette!("Failed to establish TCP connection with master server at {server_url}")
+        })?;
+
+
+        // Perform both the WebSocket handshake as well as our internal handshake.
+        let (mut web_socket, _) = client_async_with_config(
+            format!("ws://{server_url}"),
+            tcp_stream,
+            Some(DEFAULT_WEBSOCKET_CONFIG),
+        )
+        .await
+        .into_diagnostic()
+        .wrap_err_with(|| {
+            miette!("Failed to perform WebSocket handshake on given TCP connection.")
+        })?;
+
+        Self::perform_handshake(&mut web_socket, worker_id, is_a_reconnect).await?;
+
+        Ok(web_socket)
+    }
+
+    async fn reconnect(&self) -> Result<()> {
+        {
+            let mut locked_status = self.connection_status.lock().await;
+            *locked_status = WebSocketConnectionStatus::Reconnecting;
+        }
+
+        let web_socket_connection = Self::connect_and_handshake(
+            &self.server_url,
+            self.backoff_max_retries,
+            self.backoff_exp_base,
+            self.backoff_max_seconds,
+            self.worker_id,
+            false,
+        )
+        .await?;
+
+        // We have concluded the setup at this point and need to update the connection status, then
+        // simply replace the sink and stream on this instance.
+        let (ws_sink, ws_stream) = web_socket_connection.split();
+
+        {
+            let mut locked_status = self.connection_status.lock().await;
+            *locked_status = WebSocketConnectionStatus::Connected;
+
+            let mut locked_sink = self.websocket_sink.lock().await;
+            *locked_sink = ws_sink;
+
+            let mut locked_stream = self.websocket_stream.lock().await;
+            *locked_stream = ws_stream;
+        }
+
+        Ok(())
+    }
+
+    async fn establish_tcp_connection_with_exponential_backoff(
+        server_url: &str,
+        max_retries: usize,
+        exp_base: f64,
+        backoff_max_seconds: f64,
+    ) -> Result<TcpStream> {
+        let mut retries: usize = 0;
+
+        while retries < max_retries {
+            debug!(
+                server_url,
+                "Trying to establish connection with master server.",
+            );
+            let tcp_stream = TcpStream::connect(server_url).await;
+
+            if let Ok(stream) = tcp_stream {
+                return Ok(stream);
+            }
+
+            let mut retry_in = Duration::from_secs_f64(exp_base.powi(retries as i32));
+            if retry_in.as_secs_f64() > backoff_max_seconds {
+                retry_in = Duration::from_secs_f64(backoff_max_seconds);
+            }
+
+            warn!(
+                retry = retries,
+                next_retry_in = retry_in.as_secs_f64(),
+                "Could not establish TCP connection with master server.",
+            );
+            retries += 1;
+
+            tokio::time::sleep(retry_in).await;
+        }
+
+        Err(miette!(
+            "Failed to establish connection with master server after {} retries.",
+            retries
+        ))
+    }
+
+    /// Performs our internal WebSocket handshake
+    /// (master handshake request, worker response, master acknowledgement).
+    async fn perform_handshake(
+        websocket_stream: &mut WebSocketStream<TcpStream>,
+        worker_id: WorkerID,
+        is_a_reconnect: bool,
+    ) -> Result<()> {
+        info!("Waiting for handshake request from master server.");
+
+        let handshake_request: MasterHandshakeRequest =
+            receive_exact_message_from_stream(websocket_stream).await?;
+
+        info!(
+            server_version = handshake_request.server_version,
+            "Got handshake request from master server."
+        );
+
+
+        let response_message = if !is_a_reconnect {
+            WorkerHandshakeResponse::new_first_connection("1.0.0", worker_id)
+                .into_ws_message()
+                .to_tungstenite_message()?
+        } else {
+            WorkerHandshakeResponse::new_reconnection("1.0.0", worker_id)
+                .into_ws_message()
+                .to_tungstenite_message()?
+        };
+
+        websocket_stream
+            .send(response_message)
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("Failed to send handshake response."))?;
+
+        info!(worker_id = ?worker_id, is_reconnect = is_a_reconnect, "Sent handshake response, waiting for acknowledgement.");
+
+
+        let handshake_ack: MasterHandshakeAcknowledgement =
+            receive_exact_message_from_stream(websocket_stream).await?;
+
+        if !handshake_ack.ok {
+            return Err(miette!(
+                "Master server rejected us (acknowledgement not ok)."
+            ));
+        }
+
+
+        if !is_a_reconnect {
+            info!("Handshake finished - fully connected.");
+        } else {
+            info!("Handshake finished - fully reconnected.");
+        }
+
+        Ok(())
+    }
+}
+
 
 /// Worker instance. Manages the connection with the master server, receives requests
 /// and performs the rendering as instructed.
@@ -51,39 +386,26 @@ impl Worker {
         blender_runner: BlenderJobRunner,
         tracer: WorkerTraceBuilder,
     ) -> Result<()> {
-        let tcp_connection = Self::establish_tcp_connection_with_exponential_backoff(
-            master_server_url,
-            12,
-            2f64,
-            30f64,
-        )
-        .await
-        .wrap_err_with(|| miette!("Could not connect to master server."))?;
-
-        let (stream, _) = client_async_with_config(
-            format!("ws://{}", master_server_url),
-            tcp_connection,
-            Some(DEFAULT_WEBSOCKET_CONFIG),
-        )
-        .await
-        .into_diagnostic()?;
-
-        // Split the WebSocket stream and prepare async channels, but don't actually perform the handshake and other stuff yet.
-        // See `run_forever` for running the worker.
-        let (ws_sink, ws_stream) = stream.split();
+        let reconnecting_ws_client =
+            ReconnectingWebSocketClient::new_connection(master_server_url, 12, 2f64, 30f64, 2)
+                .await
+                .wrap_err_with(|| miette!("Failed to initialize ReconnectingWebSocketClient."))?;
+        let reconnecting_ws_client_arc = Arc::new(reconnecting_ws_client);
 
         let global_cancellation_token = CancellationToken::new();
 
-        let sender = MasterSender::new(ws_sink, global_cancellation_token.clone());
 
-        let (receiver, handshake_request_receiver) =
-            MasterReceiver::new(ws_stream, global_cancellation_token.clone());
+        let sender = MasterSender::new(
+            reconnecting_ws_client_arc.clone(),
+            global_cancellation_token.clone(),
+        );
 
-        Self::perform_handshake(&sender, &receiver, handshake_request_receiver)
-            .await
-            .wrap_err_with(|| miette!("Failed to perform handshake."))?;
-
+        let receiver = MasterReceiver::new(
+            reconnecting_ws_client_arc.clone(),
+            global_cancellation_token.clone(),
+        );
         let receiver_arc = Arc::new(receiver);
+
 
         let heartbeat_task_handle = tokio::spawn(Self::respond_to_heartbeats(
             receiver_arc.clone(),
@@ -100,97 +422,17 @@ impl Worker {
             global_cancellation_token.clone(),
         ));
 
-        info!("Connection fully established and async tasks are running.");
+        info!("Connection fully established and async tasks spawned.");
 
         let _ = manager_task_handle.await.into_diagnostic()?;
         let _ = heartbeat_task_handle.await.into_diagnostic()?;
 
         let _ = sender.join().await;
 
-        let receiver =
-            Arc::try_unwrap(receiver_arc).expect("BUG: Something is holding receiver_arc!");
+        let receiver = Arc::try_unwrap(receiver_arc)
+            .expect("BUG: Something is holding a strong reference to the receiver!");
         let _ = receiver.join().await;
 
-        Ok(())
-    }
-
-    async fn establish_tcp_connection_with_exponential_backoff(
-        server_url: &str,
-        max_retries: usize,
-        exp_base: f64,
-        backoff_max_seconds: f64,
-    ) -> Result<TcpStream> {
-        let mut retries: usize = 0;
-
-        while retries < max_retries {
-            debug!(
-                "Trying to establish connection with master server at {}.",
-                server_url
-            );
-            let tcp_stream = TcpStream::connect(server_url).await;
-
-            if let Ok(stream) = tcp_stream {
-                return Ok(stream);
-            }
-
-            let mut retry_in = Duration::from_secs_f64(exp_base.powi(retries as i32));
-            if retry_in.as_secs_f64() > backoff_max_seconds {
-                retry_in = Duration::from_secs_f64(backoff_max_seconds);
-            }
-
-            warn!(
-                "Could not establish connection (try {}), retrying in {:.2} seconds.",
-                retries,
-                retry_in.as_secs_f64()
-            );
-            retries += 1;
-
-            tokio::time::sleep(retry_in).await;
-        }
-
-        Err(miette!("Failed to establish connection."))
-    }
-
-    /// Performs our internal WebSocket handshake
-    /// (master handshake request, worker response, master acknowledgement).
-    async fn perform_handshake(
-        sender: &MasterSender,
-        receiver: &MasterReceiver,
-        handshake_request_receiver: Receiver<MasterHandshakeRequest>,
-    ) -> Result<()> {
-        let sender_handle = sender.sender_handle();
-        let handshake_ack_receiver = receiver.handshake_ack_receiver();
-
-        info!("Waiting for handshake request from master server.");
-
-        let handshake_request = receiver
-            .wait_for_handshake_request(Some(handshake_request_receiver), None)
-            .await
-            .wrap_err_with(|| miette!("Failed to receive handshake request."))?;
-
-        info!(
-            "Got handshake request from master server (server_version={}), sending response.",
-            handshake_request.server_version
-        );
-
-        sender_handle
-            .send_message(WorkerHandshakeResponse::new("1.0.0"))
-            .await?;
-
-        debug!("Sent handshake response, waiting for acknowledgement.");
-
-        let handshake_ack = receiver
-            .wait_for_handshake_ack(Some(handshake_ack_receiver), None)
-            .await
-            .wrap_err_with(|| miette!("Failed to receive handshake ack."))?;
-
-        if !handshake_ack.ok {
-            return Err(miette!(
-                "Master server rejected us (acknowledgement not ok)."
-            ));
-        }
-
-        info!("Handshake finished, server fully connected.");
         Ok(())
     }
 

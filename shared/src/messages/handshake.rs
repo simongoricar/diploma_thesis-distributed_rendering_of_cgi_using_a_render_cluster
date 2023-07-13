@@ -4,6 +4,19 @@ use serde::{Deserialize, Serialize};
 use crate::messages::traits::Message;
 use crate::messages::WebSocketMessage;
 
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct WorkerID(i64);
+
+impl WorkerID {
+    pub fn generate() -> Self {
+        let random_worker_id: i64 = rand::random();
+
+        Self(random_worker_id)
+    }
+}
+
+
 pub static MASTER_HANDSHAKE_REQUEST_TYPE_NAME: &str = "handshake_request";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -42,17 +55,41 @@ impl TryFrom<WebSocketMessage> for MasterHandshakeRequest {
 
 
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub enum WorkerHandshakeType {
+    #[serde(rename = "first-connection")]
+    FirstConnection,
+
+    #[serde(rename = "reconnecting")]
+    Reconnecting,
+}
+
+
 pub static WORKER_HANDSHAKE_RESPONSE_TYPE_NAME: &str = "handshake_response";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerHandshakeResponse {
+    pub handshake_type: WorkerHandshakeType,
+
     pub worker_version: String,
+
+    pub worker_id: WorkerID,
 }
 
 impl WorkerHandshakeResponse {
-    pub fn new<S: Into<String>>(worker_version: S) -> Self {
+    pub fn new_first_connection<S: Into<String>>(worker_version: S, worker_id: WorkerID) -> Self {
         Self {
+            handshake_type: WorkerHandshakeType::FirstConnection,
             worker_version: worker_version.into(),
+            worker_id,
+        }
+    }
+
+    pub fn new_reconnection<S: Into<String>>(worker_version: S, worker_id: WorkerID) -> Self {
+        Self {
+            handshake_type: WorkerHandshakeType::Reconnecting,
+            worker_version: worker_version.into(),
+            worker_id,
         }
     }
 }

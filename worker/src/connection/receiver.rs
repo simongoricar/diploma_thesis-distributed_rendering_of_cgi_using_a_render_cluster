@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use futures_util::stream::SplitStream;
-use futures_util::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshakeRequest};
@@ -11,12 +9,12 @@ use shared::messages::job::{MasterJobFinishedRequest, MasterJobStartedEvent};
 use shared::messages::queue::{MasterFrameQueueAddRequest, MasterFrameQueueRemoveRequest};
 use shared::messages::traits::Message;
 use shared::messages::{parse_websocket_message, WebSocketMessage};
-use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, info, trace, warn};
+
+use crate::connection::ReconnectingWebSocketClient;
 
 const DEFAULT_MESSAGE_WAIT_DURATION: Duration = Duration::from_secs(60);
 
@@ -57,9 +55,9 @@ impl MasterReceiver {
     /// Initialize a new `MasterEventDispatcher`, consuming the WebSocket connection's
     /// async receiver channel.
     pub fn new(
-        websocket_stream: SplitStream<WebSocketStream<TcpStream>>,
+        client: Arc<ReconnectingWebSocketClient>,
         cancellation_token: CancellationToken,
-    ) -> (Self, Receiver<MasterHandshakeRequest>) {
+    ) -> Self {
         // Initialize broadcast channels.
         let (handshake_request_tx, _) =
             broadcast::channel::<MasterHandshakeRequest>(RECEIVER_BROADCAST_CHANNEL_SIZE);
@@ -96,23 +94,17 @@ impl MasterReceiver {
             job_finished_request: job_finished_request_tx_arc,
         };
 
-        // We need to create a receiver before starting the event distribution loop below,
-        // because we might otherwise miss the very first message (this is a matter of a millisecond or two).
-        let handshake_request_receiver_handle = senders.handshake_request.subscribe();
-
         let task_join_handle = tokio::spawn(Self::run(
             senders.clone(),
-            websocket_stream,
+            client,
             cancellation_token,
         ));
 
-        (
-            Self {
-                senders,
-                task_join_handle,
-            },
-            handshake_request_receiver_handle,
-        )
+
+        Self {
+            senders,
+            task_join_handle,
+        }
     }
 
     pub async fn join(self) -> Result<()> {
@@ -123,14 +115,14 @@ impl MasterReceiver {
     /// and broadcasting the to subscribed `tokio::broadcast::Receiver`s.
     async fn run(
         senders: BroadcastSenders,
-        mut websocket_stream: SplitStream<WebSocketStream<TcpStream>>,
+        client: Arc<ReconnectingWebSocketClient>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         info!("MasterReceiver: Running event distribution loop.");
 
         loop {
             let next_message_result =
-                tokio::time::timeout(Duration::from_secs(2), websocket_stream.next()).await;
+                tokio::time::timeout(Duration::from_secs(2), client.receive_message()).await;
 
             if cancellation_token.is_cancelled() {
                 trace!("MasterReceiver: stopping distribution (worker stopping).");
@@ -138,10 +130,9 @@ impl MasterReceiver {
             }
 
             let raw_message = match next_message_result {
-                Ok(potential_message) => potential_message
-                    .ok_or_else(|| miette!("Could not read from WebSocketStream - None."))?
-                    .into_diagnostic()
-                    .wrap_err_with(|| miette!("Errored while receiving from WebSocketStream"))?,
+                Ok(potential_message) => potential_message.wrap_err_with(|| {
+                    miette!("Errored while receiving from reconnecting client.")
+                })?,
                 // Simply wait two more seconds for the next message
                 // (this Err happens when we time out on waiting for the next message).
                 Err(_) => continue,

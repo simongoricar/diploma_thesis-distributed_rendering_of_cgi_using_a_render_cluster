@@ -23,7 +23,7 @@ LOG_NAME="qb_04vs_14400f-20w_dynamic"
 BLENDER_PROJECT_DIRECTORY="$RUN_BASE_DIRECTORY/blender-projects/04_very-simple"
 JOB_FILE_PATH="$BLENDER_PROJECT_DIRECTORY/04_very-simple_measuring_14400f-20w_dynamic.toml"
 RESULTS_DIRECTORY="$BLENDER_PROJECT_DIRECTORY/results"
-SERVER_PORT=9912
+SERVER_PORT=9932
 ###
 # END of Configuration
 #####

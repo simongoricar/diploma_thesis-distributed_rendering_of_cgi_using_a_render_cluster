@@ -8,9 +8,8 @@
 #SBATCH --ntasks-per-core=1
 #SBATCH --ntasks-per-node=16
 #SBATCH --wait-all-nodes=1
-#SBATCH --constraint=amd&rome
+#SBATCH --constraint=zen3
 #SBATCH --dependency=singleton
-#SBATCH --exclude=wn[201-224]
 
 set -e
 

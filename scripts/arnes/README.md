@@ -1,0 +1,1 @@
+To queue a `queue-batch_*` script in this directory under SLURM, run `sbatch <name of the script.sh>`, not the script itself!

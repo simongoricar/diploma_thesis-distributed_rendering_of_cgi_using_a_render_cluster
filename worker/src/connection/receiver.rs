@@ -1,6 +1,7 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshakeRequest};
@@ -29,7 +30,7 @@ pub struct BroadcastSenders {
     queue_frame_remove_request: Arc<Sender<MasterFrameQueueRemoveRequest>>,
 
     /// Receives heartbeat requests.
-    heartbeat_request: Arc<Sender<(MasterHeartbeatRequest, SystemTime)>>,
+    heartbeat_request: Arc<Sender<(MasterHeartbeatRequest, DateTime<Utc>)>>,
 
     job_started_event: Arc<Sender<MasterJobStartedEvent>>,
 
@@ -64,7 +65,7 @@ impl MasterReceiver {
             broadcast::channel::<MasterFrameQueueAddRequest>(RECEIVER_BROADCAST_CHANNEL_SIZE);
         let (queue_frame_remove_request_tx, _) =
             broadcast::channel::<MasterFrameQueueRemoveRequest>(RECEIVER_BROADCAST_CHANNEL_SIZE);
-        let (heartbeat_request_tx, _) = broadcast::channel::<(MasterHeartbeatRequest, SystemTime)>(
+        let (heartbeat_request_tx, _) = broadcast::channel::<(MasterHeartbeatRequest, DateTime<Utc>)>(
             RECEIVER_BROADCAST_CHANNEL_SIZE,
         );
         let (job_started_event_tx, _) =
@@ -169,7 +170,7 @@ impl MasterReceiver {
                 }
                 WebSocketMessage::MasterHeartbeatRequest(request) => {
                     debug!("Received message: master heartbeat request.");
-                    let time_now = SystemTime::now();
+                    let time_now = Utc::now();
                     let _ = senders.heartbeat_request.send((request, time_now));
                 }
                 WebSocketMessage::MasterJobStartedEvent(event) => {
@@ -207,7 +208,7 @@ impl MasterReceiver {
     }
 
     /// Get a `Receiver` for future heartbeat requests from the master server.
-    pub fn heartbeat_request_receiver(&self) -> Receiver<(MasterHeartbeatRequest, SystemTime)> {
+    pub fn heartbeat_request_receiver(&self) -> Receiver<(MasterHeartbeatRequest, DateTime<Utc>)> {
         self.senders.heartbeat_request.subscribe()
     }
 

@@ -71,6 +71,8 @@ pub struct ReconnectingWebSocketClient {
 
     cancellation_token: CancellationToken,
 
+    tracer: WorkerTraceBuilder,
+
     pub connection_status: Atomic<WebSocketConnectionStatus>,
 
     pub websocket_sink: Arc<tokio::sync::Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
@@ -89,6 +91,7 @@ impl ReconnectingWebSocketClient {
         max_send_delay: Duration,
         max_reconnection_retries: usize,
         cancellation_token: CancellationToken,
+        tracer: WorkerTraceBuilder,
     ) -> Result<Self> {
         let server_url = server_url.into();
         let worker_id = WorkerID::generate();
@@ -120,6 +123,7 @@ impl ReconnectingWebSocketClient {
             max_send_delay,
             max_reconnection_retries,
             cancellation_token,
+            tracer,
             connection_status: Atomic::new(WebSocketConnectionStatus::Connected),
             websocket_sink: ws_sink_arc_mutex,
             websocket_stream: ws_stream_arc_mutex,
@@ -177,9 +181,16 @@ impl ReconnectingWebSocketClient {
 
                             let connection_status = self.connection_status.load(Ordering::SeqCst);
                             if connection_status != WebSocketConnectionStatus::Reconnecting {
+                                let reconnect_start_time = Utc::now();
+
                                 self.reconnect().await.wrap_err_with(|| {
                                     miette!("Could not reconnect to master server.")
                                 })?;
+
+                                let reconnect_end_time = Utc::now();
+                                self.tracer
+                                    .trace_new_reconnect(reconnect_start_time, reconnect_end_time)
+                                    .await;
                             }
 
                             reconnection_retries += 1;
@@ -241,9 +252,16 @@ impl ReconnectingWebSocketClient {
 
                         let connection_status = self.connection_status.load(Ordering::SeqCst);
                         if connection_status != WebSocketConnectionStatus::Reconnecting {
+                            let reconnect_start_time = Utc::now();
+
                             self.reconnect().await.wrap_err_with(|| {
                                 miette!("Could not reconnect to master server.")
                             })?;
+
+                            let reconnect_end_time = Utc::now();
+                            self.tracer
+                                .trace_new_reconnect(reconnect_start_time, reconnect_end_time)
+                                .await;
                         }
 
                         reconnection_retries += 1;
@@ -463,6 +481,7 @@ impl Worker {
             Duration::from_secs(30),
             2,
             global_cancellation_token.clone(),
+            tracer.clone(),
         )
         .await
         .wrap_err_with(|| miette!("Failed to initialize ReconnectingWebSocketClient."))?;

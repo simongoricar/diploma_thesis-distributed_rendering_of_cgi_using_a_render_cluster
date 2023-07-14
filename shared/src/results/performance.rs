@@ -19,6 +19,9 @@ pub struct WorkerPerformance {
     /// Total amount of frames ever un-queued during this job on this worker.
     pub total_frames_stolen_from_queue: usize,
 
+    /// Total times the worker lost connection and reconnected during the job.
+    pub total_times_reconnected: usize,
+
     /// Total worker run time.
     #[serde_as(as = "DurationSecondsWithFrac<f64>")]
     pub total_time: Duration,
@@ -46,6 +49,7 @@ impl WorkerPerformance {
         let total_frames_rendered = trace.frame_render_traces.len();
         let total_frames_queued = trace.total_queued_frames;
         let total_frames_stolen_from_queue = trace.total_queued_frames_removed_from_queue;
+        let total_times_reconnected = trace.reconnection_traces.len();
 
         // Extract time statistics.
         let total_time = trace
@@ -91,7 +95,6 @@ impl WorkerPerformance {
             total_image_saving_time += image_saving_duration;
 
 
-            // TODO Rewrite this parsing with the new detailed tracing system.
             if frame_index == 0 {
                 // This is the first frame (no previous frame to subtract with).
                 let idle_time_before_first_frame = current_frame
@@ -130,6 +133,7 @@ impl WorkerPerformance {
             total_frames_rendered,
             total_frames_queued,
             total_frames_stolen_from_queue,
+            total_times_reconnected,
             total_time,
             total_blend_file_reading_time,
             total_rendering_time,

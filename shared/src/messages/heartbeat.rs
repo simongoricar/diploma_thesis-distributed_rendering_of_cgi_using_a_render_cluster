@@ -1,5 +1,4 @@
-use std::time::SystemTime;
-
+use chrono::{DateTime, Utc};
 use miette::{miette, Report};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -14,13 +13,13 @@ pub static MASTER_HEARTBEAT_REQUEST_TYPE_NAME: &str = "request_heartbeat";
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MasterHeartbeatRequest {
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
-    pub request_time: SystemTime,
+    pub request_time: DateTime<Utc>,
 }
 
 impl MasterHeartbeatRequest {
     pub fn new_now() -> Self {
         Self {
-            request_time: SystemTime::now(),
+            request_time: Utc::now(),
         }
     }
 }

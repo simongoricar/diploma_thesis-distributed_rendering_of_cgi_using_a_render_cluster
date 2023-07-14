@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use miette::{miette, Context, IntoDiagnostic, Result};
@@ -65,17 +65,36 @@ impl WorkerFrameTrace {
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub struct WorkerPingTrace {
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
-    pub pinged_at: SystemTime,
+    pub pinged_at: DateTime<Utc>,
 
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
-    pub received_at: SystemTime,
+    pub received_at: DateTime<Utc>,
 }
 
 impl WorkerPingTrace {
-    pub fn new(pinged_at: SystemTime, received_at: SystemTime) -> Self {
+    pub fn new(pinged_at: DateTime<Utc>, received_at: DateTime<Utc>) -> Self {
         Self {
             pinged_at,
             received_at,
+        }
+    }
+}
+
+#[serde_as]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
+pub struct WorkerReconnectionTrace {
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub lost_connection_at: DateTime<Utc>,
+
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    pub reconnected_at: DateTime<Utc>,
+}
+
+impl WorkerReconnectionTrace {
+    pub fn new(lost_connection_at: DateTime<Utc>, reconnected_at: DateTime<Utc>) -> Self {
+        Self {
+            lost_connection_at,
+            reconnected_at,
         }
     }
 }
@@ -102,6 +121,8 @@ pub struct WorkerTrace {
     pub frame_render_traces: Vec<WorkerFrameTrace>,
 
     pub ping_traces: Vec<WorkerPingTrace>,
+
+    pub reconnection_traces: Vec<WorkerReconnectionTrace>,
 }
 
 
@@ -121,6 +142,8 @@ struct WorkerTraceIncomplete {
     pub frame_render_traces: Vec<WorkerFrameTrace>,
 
     pub ping_traces: Vec<WorkerPingTrace>,
+
+    pub reconnection_traces: Vec<WorkerReconnectionTrace>,
 }
 
 #[derive(Clone)]
@@ -135,6 +158,7 @@ impl WorkerTraceBuilder {
             job_finish_time: None,
             frame_render_traces: Vec::new(),
             ping_traces: Vec::new(),
+            reconnection_traces: Vec::new(),
         })))
     }
 
@@ -152,6 +176,7 @@ impl WorkerTraceBuilder {
                 .ok_or_else(|| miette!("Missing job finish time, can't build."))?,
             frame_render_traces: trace.frame_render_traces.clone(),
             ping_traces: trace.ping_traces.clone(),
+            reconnection_traces: trace.reconnection_traces.clone(),
         })
     }
 
@@ -189,12 +214,24 @@ impl WorkerTraceBuilder {
         ));
     }
 
-    // TODO integrate
-    pub async fn trace_new_ping(&self, pinged_at: SystemTime, received_at: SystemTime) {
+    pub async fn trace_new_ping(&self, pinged_at: DateTime<Utc>, received_at: DateTime<Utc>) {
         let mut trace = self.0.lock().await;
 
         trace
             .ping_traces
             .push(WorkerPingTrace::new(pinged_at, received_at));
+    }
+
+    pub async fn trace_new_reconnect(
+        &self,
+        lost_connection_at: DateTime<Utc>,
+        reconnected_at: DateTime<Utc>,
+    ) {
+        let mut trace = self.0.lock().await;
+
+        trace.reconnection_traces.push(WorkerReconnectionTrace::new(
+            lost_connection_at,
+            reconnected_at,
+        ));
     }
 }

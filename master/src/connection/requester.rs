@@ -40,16 +40,17 @@ impl WorkerRequester {
         let request = MasterFrameQueueAddRequest::new(job, frame_index);
         let request_id = request.message_request_id;
 
+        let response_receiver = self
+            .event_dispatcher
+            .frame_queue_item_add_response_receiver();
+
         self.sender_handle.send_message(request).await?;
 
         let response = self
             .event_dispatcher
-            .wait_for_message_with_predicate(
-                self.event_dispatcher
-                    .frame_queue_item_add_response_receiver(),
-                None,
-                |response| response.message_request_context_id == request_id,
-            )
+            .wait_for_message_with_predicate(response_receiver, None, |response| {
+                response.message_request_context_id == request_id
+            })
             .await
             .wrap_err_with(|| miette!("Could not receive frame queue add response."))?;
 
@@ -64,16 +65,17 @@ impl WorkerRequester {
         let request = MasterFrameQueueRemoveRequest::new(job_name, frame_index);
         let request_id = request.message_request_id;
 
+        let response_receiver = self
+            .event_dispatcher
+            .frame_queue_item_remove_response_receiver();
+
         self.sender_handle.send_message(request).await?;
 
         let response = self
             .event_dispatcher
-            .wait_for_message_with_predicate(
-                self.event_dispatcher
-                    .frame_queue_item_remove_response_receiver(),
-                None,
-                |response| response.message_request_context_id == request_id,
-            )
+            .wait_for_message_with_predicate(response_receiver, None, |response| {
+                response.message_request_context_id == request_id
+            })
             .await
             .wrap_err_with(|| miette!("Could not receive frame queue remove response."))?;
 
@@ -84,12 +86,14 @@ impl WorkerRequester {
         let request = MasterJobFinishedRequest::new();
         let request_id = request.message_request_id;
 
+        let response_receiver = self.event_dispatcher.job_finished_response_receiver();
+
         self.sender_handle.send_message(request).await?;
 
         let response = self
             .event_dispatcher
             .wait_for_message_with_predicate(
-                self.event_dispatcher.job_finished_response_receiver(),
+                response_receiver,
                 Some(Duration::from_secs(600)),
                 |response| response.message_request_context_id == request_id,
             )

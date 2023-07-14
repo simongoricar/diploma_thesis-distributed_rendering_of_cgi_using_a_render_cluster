@@ -41,6 +41,7 @@ fn parse_worker_traces(
 
 #[derive(Serialize)]
 struct RawTraceWrapper {
+    pub job: BlenderJob,
     pub master_trace: MasterTrace,
     pub worker_traces: HashMap<String, WorkerTrace>,
 }
@@ -58,6 +59,7 @@ fn save_raw_traces(
         .collect();
 
     let wrapped_raw_traces = RawTraceWrapper {
+        job: job.clone(),
         master_trace: master_trace.clone(),
         worker_traces: traces_hash_map,
     };

@@ -31,3 +31,4 @@ blender-projects/**/*.jpeg
 
 __pycache__
 logs
+scripts/arnes/backup

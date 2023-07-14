@@ -1,0 +1,18 @@
+job_name = "04vs_measuring_14400f-1w_naive-coarse"
+job_description = "Incredibly simple animation. 14400 frames, 1 worker, eager naive coarse strategy."
+
+project_file_path = "%BASE%/blender-projects/04_very-simple/04_very-simple.blend"
+render_script_path = "%BASE%/scripts/render-timing-script.py"
+
+frame_range_from = 1
+frame_range_to = 14400
+
+wait_for_number_of_workers = 1
+
+output_directory_path = "/ceph/projects/fri/sg7710/distributed-rendering-output/output_14400f_1w_eager-naive-coarse"
+output_file_name_format = "######"
+output_file_format = "JPEG"
+
+[frame_distribution_strategy]
+strategy_type = "eager-naive-coarse"
+target_queue_size = 100

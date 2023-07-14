@@ -69,6 +69,8 @@ pub struct ReconnectingWebSocketClient {
 
     max_reconnection_retries: usize,
 
+    cancellation_token: CancellationToken,
+
     pub connection_status: Atomic<WebSocketConnectionStatus>,
 
     pub websocket_sink: Arc<tokio::sync::Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
@@ -77,6 +79,7 @@ pub struct ReconnectingWebSocketClient {
 }
 
 impl ReconnectingWebSocketClient {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new_connection<S: Into<String>>(
         server_url: S,
         backoff_max_retries: usize,
@@ -85,6 +88,7 @@ impl ReconnectingWebSocketClient {
         max_receive_delay: Duration,
         max_send_delay: Duration,
         max_reconnection_retries: usize,
+        cancellation_token: CancellationToken,
     ) -> Result<Self> {
         let server_url = server_url.into();
         let worker_id = WorkerID::generate();
@@ -115,6 +119,7 @@ impl ReconnectingWebSocketClient {
             max_receive_delay,
             max_send_delay,
             max_reconnection_retries,
+            cancellation_token,
             connection_status: Atomic::new(WebSocketConnectionStatus::Connected),
             websocket_sink: ws_sink_arc_mutex,
             websocket_stream: ws_stream_arc_mutex,
@@ -126,7 +131,11 @@ impl ReconnectingWebSocketClient {
         let mut reconnection_retries: usize = 0;
 
         loop {
-            if reconnection_retries > self.max_reconnection_retries {
+            if self.cancellation_token.is_cancelled() {
+                return Err(miette!(
+                    "Cancellation token has been set, not receiving."
+                ));
+            } else if reconnection_retries > self.max_reconnection_retries {
                 return Err(miette!(
                     "Failed to receive message after {reconnection_retries} reconnection retries."
                 ));
@@ -161,18 +170,21 @@ impl ReconnectingWebSocketClient {
                         Ok(message)
                     }
                     Err(error) => {
-                        error!(error = ?error, "Could not receive message from WebSocket stream, will attempt to reconnect.");
+                        if !self.cancellation_token.is_cancelled() {
+                            error!(error = ?error, "Could not receive message from WebSocket stream, will attempt to reconnect.");
 
-                        drop(locked_stream);
+                            drop(locked_stream);
 
-                        let connection_status = self.connection_status.load(Ordering::SeqCst);
-                        if connection_status != WebSocketConnectionStatus::Reconnecting {
-                            self.reconnect().await.wrap_err_with(|| {
-                                miette!("Could not reconnect to master server.")
-                            })?;
+                            let connection_status = self.connection_status.load(Ordering::SeqCst);
+                            if connection_status != WebSocketConnectionStatus::Reconnecting {
+                                self.reconnect().await.wrap_err_with(|| {
+                                    miette!("Could not reconnect to master server.")
+                                })?;
+                            }
+
+                            reconnection_retries += 1;
                         }
 
-                        reconnection_retries += 1;
                         continue;
                     }
                 },
@@ -188,7 +200,11 @@ impl ReconnectingWebSocketClient {
         let mut reconnection_retries: usize = 0;
 
         loop {
-            if reconnection_retries > self.max_reconnection_retries {
+            if self.cancellation_token.is_cancelled() {
+                return Err(miette!(
+                    "Cancellation token has been set, not sending."
+                ));
+            } else if reconnection_retries > self.max_reconnection_retries {
                 return Err(miette!(
                     "Failed to send message after {reconnection_retries} reconnection retries."
                 ));
@@ -215,21 +231,24 @@ impl ReconnectingWebSocketClient {
             return match locked_sink.send(message.clone()).await {
                 Ok(_) => Ok(()),
                 Err(error) => {
-                    error!(
-                        error = ?error,
-                        "Could not send message through WebSocket stream, will attempt to reconnect."
-                    );
+                    if !self.cancellation_token.is_cancelled() {
+                        error!(
+                            error = ?error,
+                            "Could not send message through WebSocket stream, will attempt to reconnect."
+                        );
 
-                    drop(locked_sink);
+                        drop(locked_sink);
 
-                    let connection_status = self.connection_status.load(Ordering::SeqCst);
-                    if connection_status != WebSocketConnectionStatus::Reconnecting {
-                        self.reconnect()
-                            .await
-                            .wrap_err_with(|| miette!("Could not reconnect to master server."))?;
+                        let connection_status = self.connection_status.load(Ordering::SeqCst);
+                        if connection_status != WebSocketConnectionStatus::Reconnecting {
+                            self.reconnect().await.wrap_err_with(|| {
+                                miette!("Could not reconnect to master server.")
+                            })?;
+                        }
+
+                        reconnection_retries += 1;
                     }
 
-                    reconnection_retries += 1;
                     continue;
                 }
             };
@@ -279,6 +298,12 @@ impl ReconnectingWebSocketClient {
     }
 
     async fn reconnect(&self) -> Result<()> {
+        if self.cancellation_token.is_cancelled() {
+            return Err(miette!(
+                "Cancellation token has been set, not reconnecting."
+            ));
+        }
+
         self.connection_status.store(
             WebSocketConnectionStatus::Reconnecting,
             Ordering::SeqCst,
@@ -427,6 +452,8 @@ impl Worker {
         blender_runner: BlenderJobRunner,
         tracer: WorkerTraceBuilder,
     ) -> Result<()> {
+        let global_cancellation_token = CancellationToken::new();
+
         let reconnecting_ws_client = ReconnectingWebSocketClient::new_connection(
             master_server_url,
             12,
@@ -435,12 +462,11 @@ impl Worker {
             Duration::from_secs(30),
             Duration::from_secs(30),
             2,
+            global_cancellation_token.clone(),
         )
         .await
         .wrap_err_with(|| miette!("Failed to initialize ReconnectingWebSocketClient."))?;
         let reconnecting_ws_client_arc = Arc::new(reconnecting_ws_client);
-
-        let global_cancellation_token = CancellationToken::new();
 
 
         let sender = MasterSender::new(

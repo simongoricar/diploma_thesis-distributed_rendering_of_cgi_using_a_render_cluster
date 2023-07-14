@@ -10,7 +10,7 @@
 #SBATCH --constraint=amd&rome
 #SBATCH --dependency=singleton
 #SBATCH --exclude=wn[201-224]
-#SBATCH --partition=long
+#SBATCH --partition=gridlong
 
 set -e
 

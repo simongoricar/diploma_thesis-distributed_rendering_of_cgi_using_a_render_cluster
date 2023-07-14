@@ -2,7 +2,7 @@
 #SBATCH --job-name=qb_04vs_demo_60f-1w_naive-fine
 #SBATCH --ntasks=2
 #SBATCH --time=30
-#SBATCH --output=/d/hpc/home/sg7710/diploma/distributed-rendering-diploma/logs/%A.sbatch.qb_04vs_demo_60f-1w_naive-fine.log
+#SBATCH --output=/d/hpc/projects/FRI/sg7710/distributed-rendering-logs/%A.sbatch.qb_04vs_demo_60f-1w_naive-fine.log
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=2G
 #SBATCH --ntasks-per-core=1
@@ -18,7 +18,7 @@ set -e
 # Configuration
 ###
 RUN_BASE_DIRECTORY="$HOME/diploma/distributed-rendering-diploma"
-LOGS_DIRECTORY="$RUN_BASE_DIRECTORY/logs"
+LOGS_DIRECTORY="/d/hpc/projects/FRI/sg7710/distributed-rendering-logs/logs"
 
 LOG_NAME="qb_04vs_demo_60f-1w_naive-fine"
 BLENDER_PROJECT_DIRECTORY="$RUN_BASE_DIRECTORY/blender-projects/04_very-simple"

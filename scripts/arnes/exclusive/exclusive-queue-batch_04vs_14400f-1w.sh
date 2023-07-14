@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=qb_04vs_14400f-5w_eager-naive-coarse
-#SBATCH --ntasks=6
-#SBATCH --time=1020
-#SBATCH --output=/d/hpc/home/sg7710/diploma/distributed-rendering-diploma/logs/%A.sbatch.qb_04vs_14400f-5w_eager-naive-coarse.log
+#SBATCH --job-name=exc-qb_04vs_14400f-1w
+#SBATCH --ntasks=2
+#SBATCH --time=6000
+#SBATCH --output=/d/hpc/home/sg7710/diploma/distributed-rendering-diploma/logs/%A.sbatch.exc-qb_04vs_14400f-1w.log
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=2G
 #SBATCH --ntasks-per-core=1
@@ -10,6 +10,8 @@
 #SBATCH --constraint=amd&rome
 #SBATCH --dependency=singleton
 #SBATCH --exclude=wn[201-224]
+#SBATCH --partition=long
+#SBATCH --exclusive
 
 set -e
 
@@ -19,11 +21,11 @@ set -e
 RUN_BASE_DIRECTORY="$HOME/diploma/distributed-rendering-diploma"
 LOGS_DIRECTORY="$RUN_BASE_DIRECTORY/logs"
 
-LOG_NAME="qb_04vs_14400f-5w_eager-naive-coarse"
+LOG_NAME="exc-qb_04vs_14400f-1w"
 BLENDER_PROJECT_DIRECTORY="$RUN_BASE_DIRECTORY/blender-projects/04_very-simple"
-JOB_FILE_PATH="$BLENDER_PROJECT_DIRECTORY/04_very-simple_measuring_14400f-5w_eager-naive-coarse.toml"
-RESULTS_DIRECTORY="$BLENDER_PROJECT_DIRECTORY/results"
-SERVER_PORT=9911
+JOB_FILE_PATH="$BLENDER_PROJECT_DIRECTORY/04_very-simple_measuring_14400f-1w.toml"
+RESULTS_DIRECTORY="$BLENDER_PROJECT_DIRECTORY/results-exclusive"
+SERVER_PORT=9800
 ###
 # END of Configuration
 #####
@@ -50,14 +52,10 @@ srun --job-name="master" --nodelist="$SERVER_NODE_HOSTNAME" --ntasks=1 --nodes=1
 sleep 4
 
 ## Start all workers
-echo "[Batching] Starting workers (5 tasks)."
-for i in {1..5}; do
-  echo "[Batching] Starting worker $i."
+echo "[Batching] Starting worker (1 task)."
 
-  srun --job-name="worker.$i" --ntasks=1 --nodes=1 --output="$JOB_LOG_DIRECTORY_PATH/$LOG_NAME.slurm.worker.$i.log" --cpu-bind=cores --exact singularity exec --bind "$RUN_BASE_DIRECTORY/blender-projects" --env RUST_LOG="debug" "$RUN_BASE_DIRECTORY/blender-3.6.0.sif" "$RUN_BASE_DIRECTORY/target/release/worker" --logFilePath "$JOB_LOG_DIRECTORY_PATH/$LOG_NAME.worker.$i.log" --masterServerHost "$SERVER_NODE_HOSTNAME" --masterServerPort "$SERVER_PORT" --baseDirectory "$RUN_BASE_DIRECTORY" --blenderBinary "/usr/bin/blender" &
-
-  sleep 1
-done
+echo "[Batching] Starting worker 0."
+srun --job-name="worker.0" --ntasks=1 --nodes=1 --output="$JOB_LOG_DIRECTORY_PATH/$LOG_NAME.slurm.worker.$i.log" --cpu-bind=cores --exact singularity exec --bind "$RUN_BASE_DIRECTORY/blender-projects" --env RUST_LOG="debug" "$RUN_BASE_DIRECTORY/blender-3.6.0.sif" "$RUN_BASE_DIRECTORY/target/release/worker" --logFilePath "$JOB_LOG_DIRECTORY_PATH/$LOG_NAME.worker.$i.log" --masterServerHost "$SERVER_NODE_HOSTNAME" --masterServerPort "$SERVER_PORT" --baseDirectory "$RUN_BASE_DIRECTORY" --blenderBinary "/usr/bin/blender" &
 
 echo "[Batching] All workers started, waiting for all steps to complete."
 

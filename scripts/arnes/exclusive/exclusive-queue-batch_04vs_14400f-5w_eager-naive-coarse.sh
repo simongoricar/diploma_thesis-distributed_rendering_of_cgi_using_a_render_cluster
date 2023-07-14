@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=qb_04vs_14400f-5w_eager-naive-coarse
+#SBATCH --job-name=exc-qb_04vs_14400f-5w_eager-naive-coarse
 #SBATCH --ntasks=6
 #SBATCH --time=1020
-#SBATCH --output=/d/hpc/home/sg7710/diploma/distributed-rendering-diploma/logs/%A.sbatch.qb_04vs_14400f-5w_eager-naive-coarse.log
+#SBATCH --output=/d/hpc/home/sg7710/diploma/distributed-rendering-diploma/logs/%A.sbatch.exc-qb_04vs_14400f-5w_eager-naive-coarse.log
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=2G
 #SBATCH --ntasks-per-core=1
@@ -10,6 +10,7 @@
 #SBATCH --constraint=amd&rome
 #SBATCH --dependency=singleton
 #SBATCH --exclude=wn[201-224]
+#SBATCH --exclusive
 
 set -e
 
@@ -19,11 +20,11 @@ set -e
 RUN_BASE_DIRECTORY="$HOME/diploma/distributed-rendering-diploma"
 LOGS_DIRECTORY="$RUN_BASE_DIRECTORY/logs"
 
-LOG_NAME="qb_04vs_14400f-5w_eager-naive-coarse"
+LOG_NAME="exc-qb_04vs_14400f-5w_eager-naive-coarse"
 BLENDER_PROJECT_DIRECTORY="$RUN_BASE_DIRECTORY/blender-projects/04_very-simple"
 JOB_FILE_PATH="$BLENDER_PROJECT_DIRECTORY/04_very-simple_measuring_14400f-5w_eager-naive-coarse.toml"
-RESULTS_DIRECTORY="$BLENDER_PROJECT_DIRECTORY/results"
-SERVER_PORT=9911
+RESULTS_DIRECTORY="$BLENDER_PROJECT_DIRECTORY/results-exclusive"
+SERVER_PORT=9811
 ###
 # END of Configuration
 #####

@@ -2,7 +2,7 @@
 #SBATCH --job-name=qb_04vs_14400f-1w
 #SBATCH --ntasks=2
 #SBATCH --time=6000
-#SBATCH --output=/d/hpc/home/sg7710/diploma/distributed-rendering-diploma/logs/sbatch.%A.qb_04vs_14400f-1w.log
+#SBATCH --output=/d/hpc/home/sg7710/diploma/distributed-rendering-diploma/logs/%A.sbatch.qb_04vs_14400f-1w.log
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=2G
 #SBATCH --ntasks-per-core=1

@@ -165,9 +165,12 @@ impl ReconnectingWebSocketClient {
 
                         drop(locked_stream);
 
-                        self.reconnect()
-                            .await
-                            .wrap_err_with(|| miette!("Could not reconnect to master server."))?;
+                        let connection_status = self.connection_status.load(Ordering::SeqCst);
+                        if connection_status != WebSocketConnectionStatus::Reconnecting {
+                            self.reconnect().await.wrap_err_with(|| {
+                                miette!("Could not reconnect to master server.")
+                            })?;
+                        }
 
                         reconnection_retries += 1;
                         continue;
@@ -219,9 +222,12 @@ impl ReconnectingWebSocketClient {
 
                     drop(locked_sink);
 
-                    self.reconnect()
-                        .await
-                        .wrap_err_with(|| miette!("Could not reconnect to master server."))?;
+                    let connection_status = self.connection_status.load(Ordering::SeqCst);
+                    if connection_status != WebSocketConnectionStatus::Reconnecting {
+                        self.reconnect()
+                            .await
+                            .wrap_err_with(|| miette!("Could not reconnect to master server."))?;
+                    }
 
                     reconnection_retries += 1;
                     continue;
@@ -272,12 +278,15 @@ impl ReconnectingWebSocketClient {
         Ok(web_socket)
     }
 
-    // FIXME: For some reason the frame finished events stop being to the master server after a reconnect, investigate.
     async fn reconnect(&self) -> Result<()> {
         self.connection_status.store(
             WebSocketConnectionStatus::Reconnecting,
             Ordering::SeqCst,
         );
+
+        let mut locked_sink = self.websocket_sink.lock().await;
+        let mut locked_stream = self.websocket_stream.lock().await;
+
 
         let web_socket_connection = Self::connect_to_master_server_and_handshake(
             &self.server_url,
@@ -289,22 +298,18 @@ impl ReconnectingWebSocketClient {
         )
         .await?;
 
+
         // We have concluded the setup at this point and need to update the connection status, then
         // simply replace the sink and stream on this instance.
         let (ws_sink, ws_stream) = web_socket_connection.split();
 
-        {
-            let mut locked_sink = self.websocket_sink.lock().await;
-            let mut locked_stream = self.websocket_stream.lock().await;
+        *locked_sink = ws_sink;
+        *locked_stream = ws_stream;
 
-            *locked_sink = ws_sink;
-            *locked_stream = ws_stream;
-
-            self.connection_status.store(
-                WebSocketConnectionStatus::Connected,
-                Ordering::SeqCst,
-            );
-        }
+        self.connection_status.store(
+            WebSocketConnectionStatus::Connected,
+            Ordering::SeqCst,
+        );
 
         Ok(())
     }

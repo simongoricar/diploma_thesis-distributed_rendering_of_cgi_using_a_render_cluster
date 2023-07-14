@@ -104,23 +104,22 @@ impl ReconnectableClientConnection {
             Ordering::SeqCst,
         );
 
+        let mut locked_sink = self.websocket_sink.lock().await;
+        let mut locked_stream = self.websocket_stream.lock().await;
+
 
         let (ws_sink, ws_stream) = websocket_connection.split();
 
-        {
-            let mut locked_sink = self.websocket_sink.lock().await;
-            let mut locked_stream = self.websocket_stream.lock().await;
+        *locked_sink = ws_sink;
+        *locked_stream = ws_stream;
 
-            *locked_sink = ws_sink;
-            *locked_stream = ws_stream;
 
-            self.connection_status.store(
-                ClientConnectionStatus::Connected {
-                    address: new_address,
-                },
-                Ordering::SeqCst,
-            );
-        }
+        self.connection_status.store(
+            ClientConnectionStatus::Connected {
+                address: new_address,
+            },
+            Ordering::SeqCst,
+        );
     }
 
     pub async fn receive_message(&self) -> Result<Message> {
@@ -159,11 +158,12 @@ impl ReconnectableClientConnection {
                             "Could not receive message from WebSocket stream, will wait for reconnect."
                         );
 
-                        drop(locked_stream);
                         self.connection_status.store(
                             ClientConnectionStatus::Disconnected,
                             Ordering::SeqCst,
                         );
+
+                        drop(locked_stream);
 
                         continue;
                     }
@@ -209,11 +209,12 @@ impl ReconnectableClientConnection {
                         "Could not send message through WebSocket stream, will wait for reconnect."
                     );
 
-                    drop(locked_sink);
                     self.connection_status.store(
                         ClientConnectionStatus::Disconnected,
                         Ordering::SeqCst,
                     );
+
+                    drop(locked_sink);
 
                     continue;
                 }

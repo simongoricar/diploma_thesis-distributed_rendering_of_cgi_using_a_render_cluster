@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use atomic::Atomic;
 use futures_util::stream::{SplitSink, SplitStream};
@@ -63,6 +63,10 @@ pub struct ReconnectableClientConnection {
 
     pub connection_status: Atomic<ClientConnectionStatus>,
 
+    max_receive_delay: Duration,
+
+    max_send_delay: Duration,
+
     websocket_sink: Arc<Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
     websocket_stream: Arc<Mutex<SplitStream<WebSocketStream<TcpStream>>>>,
 }
@@ -72,6 +76,8 @@ impl ReconnectableClientConnection {
         worker_id: WorkerID,
         websocket_connection: WebSocketStream<TcpStream>,
         address: SocketAddr,
+        max_receive_delay: Duration,
+        max_send_delay: Duration,
     ) -> Self {
         let (ws_sink, ws_stream) = websocket_connection.split();
 
@@ -81,6 +87,8 @@ impl ReconnectableClientConnection {
         Self {
             worker_id,
             connection_status: Atomic::new(ClientConnectionStatus::Connected { address }),
+            max_receive_delay,
+            max_send_delay,
             websocket_sink: ws_sink_arc_mutex,
             websocket_stream: ws_stream_arc_mutex,
         }
@@ -116,23 +124,31 @@ impl ReconnectableClientConnection {
     }
 
     pub async fn receive_message(&self) -> Result<Message> {
+        let receive_request_begin_time = Instant::now();
+
         loop {
+            if receive_request_begin_time.elapsed() > self.max_receive_delay {
+                return Err(miette!(
+                    "Failed to receive message after {:.3} seconds.",
+                    receive_request_begin_time.elapsed().as_secs_f64()
+                ));
+            }
+
             {
                 let connection_status = self.connection_status.load(Ordering::SeqCst);
                 if connection_status == ClientConnectionStatus::Disconnected {
                     trace!(
                         worker_id = %self.worker_id,
-                        "Currently reconnecting, waiting 100 ms before retrying receive from worker."
+                        "Currently reconnecting, waiting 50 ms before retrying receive from worker."
                     );
 
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
 
                     continue;
                 }
             }
 
             let mut locked_stream = self.websocket_stream.lock().await;
-
             return match locked_stream.next().await {
                 Some(message) => match message {
                     Ok(message) => Ok(message),
@@ -144,6 +160,10 @@ impl ReconnectableClientConnection {
                         );
 
                         drop(locked_stream);
+                        self.connection_status.store(
+                            ClientConnectionStatus::Disconnected,
+                            Ordering::SeqCst,
+                        );
 
                         continue;
                     }
@@ -156,20 +176,30 @@ impl ReconnectableClientConnection {
     }
 
     pub async fn send_message(&self, message: Message) -> Result<()> {
+        let send_request_begin_time = Instant::now();
+
+        // TODO Introduce maximum delay after which this will return Err!
         loop {
+            if send_request_begin_time.elapsed() > self.max_send_delay {
+                return Err(miette!(
+                    "Failed to send message after {:.3} seconds.",
+                    send_request_begin_time.elapsed().as_secs_f64()
+                ));
+            }
+
+
             {
                 let connection_status = self.connection_status.load(Ordering::SeqCst);
                 if connection_status == ClientConnectionStatus::Disconnected {
-                    debug!("Currently reconnecting, waiting 100 ms before retrying send.");
+                    debug!("Currently reconnecting, waiting 50 ms before retrying send.");
 
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
 
                     continue;
                 }
             }
 
             let mut locked_sink = self.websocket_sink.lock().await;
-
             return match locked_sink.send(message.clone()).await {
                 Ok(_) => Ok(()),
                 Err(error) => {
@@ -180,6 +210,10 @@ impl ReconnectableClientConnection {
                     );
 
                     drop(locked_sink);
+                    self.connection_status.store(
+                        ClientConnectionStatus::Disconnected,
+                        Ordering::SeqCst,
+                    );
 
                     continue;
                 }
@@ -380,6 +414,8 @@ impl ReconnectingWebSocketServer {
                         handshake_response.worker_id,
                         ws_stream,
                         address,
+                        Duration::from_secs(30),
+                        Duration::from_secs(30),
                     );
                     let connection_arc = Arc::new(connection);
 
@@ -391,7 +427,6 @@ impl ReconnectingWebSocketServer {
                     connection_arc
                 };
 
-                info!("Initial connection successful.");
 
                 let heartbeat_cancellation_token = CancellationToken::new();
                 let worker = Worker::initialize_from_handshaked_connection(
@@ -407,6 +442,12 @@ impl ReconnectingWebSocketServer {
                     let mut locked_worker_map = cluster_state.workers.lock().await;
                     locked_worker_map.insert(worker.id, worker);
                 }
+
+                info!(
+                    worker_address = %address,
+                    worker_id = %handshake_response.worker_id,
+                    "Worker has successfully established an initial connection."
+                );
             }
             WorkerHandshakeType::Reconnecting => {
                 let locked_worker_map = worker_map.lock().await;
@@ -426,6 +467,11 @@ impl ReconnectingWebSocketServer {
                 // No need to update worker map, the Worker implementation
                 // already uses an Arc-ed connection so the underlying connection
                 // will be swapped out automatically.
+                info!(
+                    worker_address = %address,
+                    worker_id = %handshake_response.worker_id,
+                    "Worker has successfully reconnected."
+                );
             }
         };
 

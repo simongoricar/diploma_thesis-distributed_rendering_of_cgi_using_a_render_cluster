@@ -18,7 +18,6 @@ use shared::messages::{parse_websocket_message, WebSocketMessage};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
-use tracing::warn;
 
 use crate::cluster::ReconnectableClientConnection;
 use crate::connection::worker_logger::WorkerLogger;
@@ -161,31 +160,86 @@ impl WorkerReceiver {
             // isn't really an error, it's just that no-one will see that message (as no one is subscribed).
             match parsed_message {
                 WebSocketMessage::WorkerHandshakeResponse(response) => {
-                    let _ = broadcast_senders.handshake_response.send(response);
+                    match broadcast_senders.handshake_response.send(response) {
+                        Ok(num_subscribers) => {
+                            logger.debug(format!("Received message: worker handshake response ({num_subscribers} subscribers)."));
+                        }
+                        Err(_) => {
+                            logger.debug(
+                                "Received message: worker handshake response (no subscribers).",
+                            );
+                        }
+                    }
                 }
                 WebSocketMessage::WorkerFrameQueueAddResponse(response) => {
-                    let _ = broadcast_senders.queue_item_add_response.send(response);
+                    match broadcast_senders.queue_item_add_response.send(response) {
+                        Ok(num_subscribers) => {
+                            logger.debug(format!("Received message: worker frame queue add response ({num_subscribers} subscribers)."));
+                        }
+                        Err(_) => {
+                            logger.debug("Received message: worker frame queue add response (no subscribers).");
+                        }
+                    }
                 }
                 WebSocketMessage::WorkerFrameQueueRemoveResponse(response) => {
-                    let _ = broadcast_senders.queue_item_remove_response.send(response);
+                    match broadcast_senders.queue_item_remove_response.send(response) {
+                        Ok(num_subscribers) => {
+                            logger.debug(format!("Received message: worker frame queue remove response ({num_subscribers} subscribers)."));
+                        }
+                        Err(_) => {
+                            logger.debug("Received message: worker frame queue remove response (no subscribers).");
+                        }
+                    }
                 }
                 WebSocketMessage::WorkerFrameQueueItemRenderingEvent(event) => {
-                    let _ = broadcast_senders.queue_item_rendering_event.send(event);
+                    match broadcast_senders.queue_item_rendering_event.send(event) {
+                        Ok(num_subscribers) => {
+                            logger.debug(format!("Received message: worker frame queue item rendering event ({num_subscribers} subscribers)."));
+                        }
+                        Err(_) => {
+                            logger.debug("Received message: worker frame queue item rendering event (no subscribers).");
+                        }
+                    }
                 }
                 WebSocketMessage::WorkerFrameQueueItemFinishedEvent(event) => {
-                    let _ = broadcast_senders.queue_item_finished_event.send(event);
+                    match broadcast_senders.queue_item_finished_event.send(event) {
+                        Ok(num_subscribers) => {
+                            logger.debug(format!("Received message: worker frame queue item finished event ({num_subscribers} subscribers)."));
+                        }
+                        Err(_) => {
+                            logger.debug("Received message: worker frame queue item finished event (no subscribers).");
+                        }
+                    }
                 }
                 WebSocketMessage::WorkerHeartbeatResponse(response) => {
-                    let _ = broadcast_senders.heartbeat_response.send(response);
+                    match broadcast_senders.heartbeat_response.send(response) {
+                        Ok(num_subscribers) => {
+                            logger.debug(format!("Received message: worker heartbeat response ({num_subscribers} subscribers)."));
+                        }
+                        Err(_) => {
+                            logger.debug(
+                                "Received message: worker heartbeat response (no subscribers).",
+                            );
+                        }
+                    }
                 }
                 WebSocketMessage::WorkerJobFinishedResponse(response) => {
-                    let _ = broadcast_senders.job_finished_response.send(response);
+                    match broadcast_senders.job_finished_response.send(response) {
+                        Ok(num_subscribers) => {
+                            logger.debug(format!("Received message: worker job finished response ({num_subscribers} subscribers)."));
+                        }
+                        Err(_) => {
+                            logger.debug(
+                                "Received message: worker job finished response (no subscribers).",
+                            );
+                        }
+                    }
                 }
                 _ => {
-                    warn!(
-                        "WorkerReceiver: Unexpected (but valid) incoming WebSocket message: {}",
+                    logger.error(format!(
+                        "Received unexpected (though valid) message with type: {}",
                         parsed_message.type_name()
-                    );
+                    ));
                 }
             }
         }

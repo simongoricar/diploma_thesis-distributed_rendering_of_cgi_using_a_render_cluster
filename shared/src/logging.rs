@@ -58,6 +58,7 @@ pub fn initialize_console_and_file_logging(
         LogFileOutputMode::None
     };
 
+
     let (log_file_subscriber, guard) = if let LogFileOutputMode::Some {
         directory_path,
         log_file_name,
@@ -72,6 +73,7 @@ pub fn initialize_console_and_file_logging(
         (None, None)
     };
 
+
     let console_subscriber = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .finish();
@@ -84,9 +86,11 @@ pub fn initialize_console_and_file_logging(
 
     let master_subscriber = console_subscriber.with(file_layer);
 
+
     tracing::subscriber::set_global_default(master_subscriber)
         .into_diagnostic()
         .wrap_err_with(|| miette!("Failed to set up logging."))?;
+
 
     Ok(guard)
 }

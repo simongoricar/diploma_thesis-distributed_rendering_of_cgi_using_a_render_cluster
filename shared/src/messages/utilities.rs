@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +16,12 @@ impl MessageRequestID {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct OutgoingMessageID(u64);
+
+impl Display for OutgoingMessageID {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl OutgoingMessageID {
     #[inline]

@@ -9,7 +9,7 @@ use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::jobs::BlenderJob;
 use shared::results::worker_trace::WorkerTraceBuilder;
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use crate::rendering::runner::utilities::extract_blender_render_information;
 use crate::utilities::parse_with_base_directory_prefix;
@@ -58,10 +58,7 @@ impl BlenderJobRunner {
             Vec::new()
         };
 
-        debug!(
-            "Parsed prepend arguments: {:?}",
-            parsed_prepend_arguments
-        );
+        debug!("Parsed prepend arguments: {parsed_prepend_arguments:?}",);
 
         Ok(Self {
             blender_binary_path: blender_binary,
@@ -112,11 +109,6 @@ impl BlenderJobRunner {
          * Parse output file
          */
         let output_file_path_str = {
-            debug!(
-                "Before parsing: output_directory_path is {}",
-                job.output_directory_path
-            );
-
             let output_directory = parse_with_base_directory_prefix(
                 &job.output_directory_path,
                 Some(&self.base_directory_path),
@@ -130,18 +122,20 @@ impl BlenderJobRunner {
 
 
             let mut output_path = output_directory.to_string_lossy().to_string();
-            debug!(
-                "After parsing: output_directory_path is {}",
-                output_path
-            );
 
             output_path.push('/');
             output_path.push_str(&job.output_file_name_format);
 
+            debug!(
+                original_output_directory_path = job.output_directory_path,
+                parsed_output_path = output_path,
+                "Output path has been parsed.",
+            );
+
             output_path
         };
 
-        info!("Starting to render frame {}.", frame_index);
+        info!(frame_index = frame_index, "Rendering frame.");
 
         let mut blender_args = self.blender_prepend_arguments.clone();
         blender_args.extend(
@@ -163,7 +157,10 @@ impl BlenderJobRunner {
         );
         blender_args.extend(self.blender_append_arguments.iter().cloned());
 
-        debug!("Blender arguments: {:?}", blender_args);
+        trace!(
+            arguments = ?blender_args,
+            "Parsed blender arguments."
+        );
 
         let process_start_time = Utc::now();
 
@@ -193,9 +190,9 @@ impl BlenderJobRunner {
             blender_statistics.with_process_information(process_start_time, process_stop_time);
 
         info!(
-            "Rendered frame {} in {:.4} seconds.",
-            frame_index,
-            blender_statistics.total_execution_time()?.as_secs_f64()
+            frame_index = frame_index,
+            total_time = blender_statistics.total_execution_time()?.as_secs_f64(),
+            "Frame has finished rendering."
         );
 
         self.tracer

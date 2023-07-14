@@ -7,9 +7,3 @@ pub const DEFAULT_WEBSOCKET_CONFIG: WebSocketConfig = WebSocketConfig {
     max_frame_size: Some(16 << 20),
     accept_unmasked_frames: false,
 };
-
-#[derive(Eq, PartialEq, Hash)]
-pub enum WebSocketConnectionStatus {
-    Reconnecting,
-    Connected,
-}

@@ -6,6 +6,7 @@ use futures_util::stream::StreamExt;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite;
+use tracing::debug;
 
 use crate::messages::handshake::{
     MasterHandshakeAcknowledgement,
@@ -52,11 +53,17 @@ impl SenderHandle {
     pub async fn send_message<M: Into<WebSocketMessage>>(&self, message: M) -> Result<()> {
         let (message, sent_receiver) =
             OutgoingMessage::from_message(message.into().to_tungstenite_message()?);
+        let message_id = message.id;
 
         self.sender_channel
             .unbounded_send(message)
             .into_diagnostic()
             .wrap_err_with(|| miette!("Could not queue WebSocket message for sending."))?;
+
+        debug!(
+            message_id = %message_id,
+            "Queued message for sending."
+        );
 
         sent_receiver
             .await

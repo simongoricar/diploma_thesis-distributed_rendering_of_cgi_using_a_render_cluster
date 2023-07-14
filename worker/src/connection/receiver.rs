@@ -7,7 +7,6 @@ use shared::messages::handshake::{MasterHandshakeAcknowledgement, MasterHandshak
 use shared::messages::heartbeat::MasterHeartbeatRequest;
 use shared::messages::job::{MasterJobFinishedRequest, MasterJobStartedEvent};
 use shared::messages::queue::{MasterFrameQueueAddRequest, MasterFrameQueueRemoveRequest};
-use shared::messages::traits::Message;
 use shared::messages::{parse_websocket_message, WebSocketMessage};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
@@ -15,8 +14,6 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, trace, warn};
 
 use crate::connection::ReconnectingWebSocketClient;
-
-const DEFAULT_MESSAGE_WAIT_DURATION: Duration = Duration::from_secs(60);
 
 
 #[derive(Clone, Debug)]
@@ -199,14 +196,6 @@ impl MasterReceiver {
      * Public event channel methods
      */
 
-    pub fn handshake_request_receiver(&self) -> Receiver<MasterHandshakeRequest> {
-        self.senders.handshake_request.subscribe()
-    }
-
-    pub fn handshake_ack_receiver(&self) -> Receiver<MasterHandshakeAcknowledgement> {
-        self.senders.handshake_ack.subscribe()
-    }
-
     /// Get a `Receiver` for future "queue item add" requests from the master server.
     pub fn frame_queue_add_request_receiver(&self) -> Receiver<MasterFrameQueueAddRequest> {
         self.senders.queue_frame_add_request.subscribe()
@@ -222,65 +211,13 @@ impl MasterReceiver {
         self.senders.heartbeat_request.subscribe()
     }
 
+    /// Get a `Receiver` for future job start events from the master server.
     pub fn job_started_event_receiver(&self) -> Receiver<MasterJobStartedEvent> {
         self.senders.job_started_event.subscribe()
     }
 
+    /// Get a `Receiver` for future job finished requests from the master server.
     pub fn job_finished_request_receiver(&self) -> Receiver<MasterJobFinishedRequest> {
         self.senders.job_finished_request.subscribe()
-    }
-
-    /*
-     * One-shot async event methods
-     */
-
-    pub async fn wait_for_message<R: Message + Clone>(
-        &self,
-        mut receiver: Receiver<R>,
-        timeout: Option<Duration>,
-    ) -> Result<R> {
-        let timeout = timeout.unwrap_or(DEFAULT_MESSAGE_WAIT_DURATION);
-
-        let receiver_future = async {
-            receiver.recv().await.into_diagnostic().wrap_err_with(|| {
-                miette!(
-                    "Could not receive message through channel (expected {}).",
-                    R::type_name()
-                )
-            })
-        };
-
-        let resolved_future = tokio::time::timeout(timeout, receiver_future).await;
-        match resolved_future {
-            Ok(result) => result,
-            Err(_) => Err(miette!(
-                "Timed out while waiting for message: {}",
-                R::type_name()
-            )),
-        }
-    }
-
-    pub async fn wait_for_handshake_request(
-        &self,
-        receiver: Option<Receiver<MasterHandshakeRequest>>,
-        timeout: Option<Duration>,
-    ) -> Result<MasterHandshakeRequest> {
-        self.wait_for_message(
-            receiver.unwrap_or_else(|| self.handshake_request_receiver()),
-            timeout,
-        )
-        .await
-    }
-
-    pub async fn wait_for_handshake_ack(
-        &self,
-        receiver: Option<Receiver<MasterHandshakeAcknowledgement>>,
-        timeout: Option<Duration>,
-    ) -> Result<MasterHandshakeAcknowledgement> {
-        self.wait_for_message(
-            receiver.unwrap_or_else(|| self.handshake_ack_receiver()),
-            timeout,
-        )
-        .await
     }
 }

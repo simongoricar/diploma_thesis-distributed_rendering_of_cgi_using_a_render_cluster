@@ -7,7 +7,7 @@ use miette::{miette, Context, IntoDiagnostic, Result};
 use shared::cancellation::CancellationToken;
 use shared::messages::{OutgoingMessage, SenderHandle};
 use tokio::task::JoinHandle;
-use tracing::{debug, trace};
+use tracing::{debug, error};
 
 use crate::connection::ReconnectingWebSocketClient;
 
@@ -57,34 +57,47 @@ impl MasterSender {
         debug!("Running task loop: forwarding incoming messages through WebSocket connection.");
 
         loop {
+            if global_cancellation_token.is_cancelled() {
+                debug!("Stopping outgoing messages sender (worker stopping).");
+                break;
+            }
+
+
             let potential_message = tokio::time::timeout(
                 Duration::from_secs(2),
                 message_send_queue_receiver.next(),
             )
             .await;
 
-            if global_cancellation_token.is_cancelled() {
-                trace!("Stopping outgoing messages sender (worker stopping).");
-                break;
-            }
-
             if let Ok(outgoing_message) = potential_message {
                 let outgoing_message = outgoing_message
                     .ok_or_else(|| miette!("Can't get outgoing message from queue channel!"))?;
 
-                trace!(
-                    "Sending message: id={}",
-                    outgoing_message.id.as_u64()
+                debug!(
+                    message_id = outgoing_message.id.as_u64(),
+                    "Sending message.",
                 );
 
-                websocket_client
+                match websocket_client
                     .send_message(outgoing_message.message)
                     .await
-                    .wrap_err_with(|| {
-                        miette!("Could not send message, reconnecting WebSocket client failed.")
-                    })?;
+                {
+                    Ok(_) => {
+                        debug!(
+                            message_id = outgoing_message.id.as_u64(),
+                            "Message sent and oneshot triggered.",
+                        );
+                        let _ = outgoing_message.oneshot_sender.send(());
+                    }
+                    Err(error) => {
+                        error!(
+                            error = ?error,
+                            "Failed to send message through the reconnecting socket (oneshot not triggered)."
+                        );
 
-                let _ = outgoing_message.oneshot_sender.send(());
+                        return Err(error).wrap_err_with(|| miette!("Failed to send message."));
+                    }
+                };
             }
         }
 

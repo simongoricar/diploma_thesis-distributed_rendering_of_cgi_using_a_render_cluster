@@ -1,9 +1,11 @@
 pub mod receiver;
 pub mod sender;
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use atomic::Atomic;
 use chrono::Utc;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -30,7 +32,7 @@ use shared::messages::queue::{
 use shared::messages::traits::IntoWebSocketMessage;
 use shared::messages::{receive_exact_message_from_stream, SenderHandle};
 use shared::results::worker_trace::WorkerTraceBuilder;
-use shared::websockets::{WebSocketConnectionStatus, DEFAULT_WEBSOCKET_CONFIG};
+use shared::websockets::DEFAULT_WEBSOCKET_CONFIG;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{client_async_with_config, WebSocketStream};
@@ -43,20 +45,34 @@ use crate::rendering::runner::BlenderJobRunner;
 
 const TRACE_EVERY_NTH_PING: usize = 8;
 
+#[derive(Eq, PartialEq, Hash, Copy, Clone)]
+pub enum WebSocketConnectionStatus {
+    Reconnecting,
+    Connected,
+}
+
 
 pub struct ReconnectingWebSocketClient {
+    pub worker_id: WorkerID,
+
     server_url: String,
+
     backoff_max_retries: usize,
+
     backoff_exp_base: f64,
+
     backoff_max_seconds: f64,
+
+    max_receive_delay: Duration,
+
+    max_send_delay: Duration,
 
     max_reconnection_retries: usize,
 
-    pub worker_id: WorkerID,
-
-    pub connection_status: tokio::sync::Mutex<WebSocketConnectionStatus>,
+    pub connection_status: Atomic<WebSocketConnectionStatus>,
 
     pub websocket_sink: Arc<tokio::sync::Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
+
     pub websocket_stream: Arc<tokio::sync::Mutex<SplitStream<WebSocketStream<TcpStream>>>>,
 }
 
@@ -66,15 +82,14 @@ impl ReconnectingWebSocketClient {
         backoff_max_retries: usize,
         backoff_exp_base: f64,
         backoff_max_seconds: f64,
+        max_receive_delay: Duration,
+        max_send_delay: Duration,
         max_reconnection_retries: usize,
     ) -> Result<Self> {
         let server_url = server_url.into();
         let worker_id = WorkerID::generate();
 
-        // TODO implement reconnecting websocket, then make sender and receiver implementations
-        //      use a reference to this, not the raw sink and stream.
-
-        let web_socket_connection = Self::connect_and_handshake(
+        let web_socket_connection = Self::connect_to_master_server_and_handshake(
             &server_url,
             backoff_max_retries,
             backoff_exp_base,
@@ -92,41 +107,59 @@ impl ReconnectingWebSocketClient {
         let ws_stream_arc_mutex = Arc::new(tokio::sync::Mutex::new(ws_stream));
 
         Ok(Self {
+            worker_id,
             server_url,
             backoff_max_retries,
             backoff_exp_base,
             backoff_max_seconds,
+            max_receive_delay,
+            max_send_delay,
             max_reconnection_retries,
-            worker_id,
-            connection_status: tokio::sync::Mutex::new(WebSocketConnectionStatus::Connected),
+            connection_status: Atomic::new(WebSocketConnectionStatus::Connected),
             websocket_sink: ws_sink_arc_mutex,
             websocket_stream: ws_stream_arc_mutex,
         })
     }
 
     pub async fn receive_message(&self) -> Result<Message> {
-        let mut retries: usize = 0;
+        let receive_request_begin_time = Instant::now();
+        let mut reconnection_retries: usize = 0;
 
-        while retries < self.max_reconnection_retries {
+        loop {
+            if reconnection_retries > self.max_reconnection_retries {
+                return Err(miette!(
+                    "Failed to receive message after {reconnection_retries} reconnection retries."
+                ));
+            } else if receive_request_begin_time.elapsed() > self.max_receive_delay {
+                return Err(miette!(
+                    "Failed to receive message after {:.3} seconds.",
+                    receive_request_begin_time.elapsed().as_secs_f64()
+                ));
+            }
+
+
             {
-                let locked_status = self.connection_status.lock().await;
+                let connection_status = self.connection_status.load(Ordering::SeqCst);
 
-                if *locked_status == WebSocketConnectionStatus::Reconnecting {
+                if connection_status == WebSocketConnectionStatus::Reconnecting {
                     debug!("Currently reconnecting, waiting 50 ms before retrying receive.");
-                    drop(locked_status);
 
                     tokio::time::sleep(Duration::from_millis(50)).await;
-
-                    retries += 1;
                     continue;
                 }
             }
 
-            let mut locked_stream = self.websocket_stream.lock().await;
 
+            let mut locked_stream = self.websocket_stream.lock().await;
             return match locked_stream.next().await {
                 Some(message) => match message {
-                    Ok(message) => Ok(message),
+                    Ok(message) => {
+                        if reconnection_retries > 0 {
+                            debug!("Message was successfully received after a reconnect.");
+                        }
+
+                        Ok(message)
+                    }
                     Err(error) => {
                         error!(error = ?error, "Could not receive message from WebSocket stream, will attempt to reconnect.");
 
@@ -136,7 +169,7 @@ impl ReconnectingWebSocketClient {
                             .await
                             .wrap_err_with(|| miette!("Could not reconnect to master server."))?;
 
-                        retries += 1;
+                        reconnection_retries += 1;
                         continue;
                     }
                 },
@@ -145,33 +178,37 @@ impl ReconnectingWebSocketClient {
                 )),
             };
         }
-
-        Err(miette!(
-            "Failed to receive message after {} reconnection retries.",
-            retries
-        ))
     }
 
     pub async fn send_message(&self, message: Message) -> Result<()> {
-        let mut retries: usize = 0;
+        let send_request_begin_time = Instant::now();
+        let mut reconnection_retries: usize = 0;
 
-        while retries < self.max_reconnection_retries {
+        loop {
+            if reconnection_retries > self.max_reconnection_retries {
+                return Err(miette!(
+                    "Failed to send message after {reconnection_retries} reconnection retries."
+                ));
+            } else if send_request_begin_time.elapsed() > self.max_send_delay {
+                return Err(miette!(
+                    "Failed to send message after {:.3} seconds.",
+                    send_request_begin_time.elapsed().as_secs_f64()
+                ));
+            }
+
+
             {
-                let locked_status = self.connection_status.lock().await;
+                let connection_status = self.connection_status.load(Ordering::SeqCst);
 
-                if *locked_status == WebSocketConnectionStatus::Reconnecting {
+                if connection_status == WebSocketConnectionStatus::Reconnecting {
                     debug!("Currently reconnecting, waiting 50 ms before retrying send.");
-                    drop(locked_status);
 
                     tokio::time::sleep(Duration::from_millis(50)).await;
-
-                    retries += 1;
                     continue;
                 }
             }
 
             let mut locked_sink = self.websocket_sink.lock().await;
-
             return match locked_sink.send(message.clone()).await {
                 Ok(_) => Ok(()),
                 Err(error) => {
@@ -186,23 +223,18 @@ impl ReconnectingWebSocketClient {
                         .await
                         .wrap_err_with(|| miette!("Could not reconnect to master server."))?;
 
-                    retries += 1;
+                    reconnection_retries += 1;
                     continue;
                 }
             };
         }
-
-        Err(miette!(
-            "Failed to send message after {} reconnection retries.",
-            retries
-        ))
     }
 
     /*
      * Private methods
      */
 
-    async fn connect_and_handshake(
+    async fn connect_to_master_server_and_handshake(
         server_url: &str,
         max_retries: usize,
         exp_base: f64,
@@ -240,19 +272,20 @@ impl ReconnectingWebSocketClient {
         Ok(web_socket)
     }
 
+    // FIXME: For some reason the frame finished events stop being to the master server after a reconnect, investigate.
     async fn reconnect(&self) -> Result<()> {
-        {
-            let mut locked_status = self.connection_status.lock().await;
-            *locked_status = WebSocketConnectionStatus::Reconnecting;
-        }
+        self.connection_status.store(
+            WebSocketConnectionStatus::Reconnecting,
+            Ordering::SeqCst,
+        );
 
-        let web_socket_connection = Self::connect_and_handshake(
+        let web_socket_connection = Self::connect_to_master_server_and_handshake(
             &self.server_url,
             self.backoff_max_retries,
             self.backoff_exp_base,
             self.backoff_max_seconds,
             self.worker_id,
-            false,
+            true,
         )
         .await?;
 
@@ -261,14 +294,16 @@ impl ReconnectingWebSocketClient {
         let (ws_sink, ws_stream) = web_socket_connection.split();
 
         {
-            let mut locked_status = self.connection_status.lock().await;
-            *locked_status = WebSocketConnectionStatus::Connected;
-
             let mut locked_sink = self.websocket_sink.lock().await;
-            *locked_sink = ws_sink;
-
             let mut locked_stream = self.websocket_stream.lock().await;
+
+            *locked_sink = ws_sink;
             *locked_stream = ws_stream;
+
+            self.connection_status.store(
+                WebSocketConnectionStatus::Connected,
+                Ordering::SeqCst,
+            );
         }
 
         Ok(())
@@ -387,10 +422,17 @@ impl Worker {
         blender_runner: BlenderJobRunner,
         tracer: WorkerTraceBuilder,
     ) -> Result<()> {
-        let reconnecting_ws_client =
-            ReconnectingWebSocketClient::new_connection(master_server_url, 12, 2f64, 30f64, 2)
-                .await
-                .wrap_err_with(|| miette!("Failed to initialize ReconnectingWebSocketClient."))?;
+        let reconnecting_ws_client = ReconnectingWebSocketClient::new_connection(
+            master_server_url,
+            12,
+            2f64,
+            30f64,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            2,
+        )
+        .await
+        .wrap_err_with(|| miette!("Failed to initialize ReconnectingWebSocketClient."))?;
         let reconnecting_ws_client_arc = Arc::new(reconnecting_ws_client);
 
         let global_cancellation_token = CancellationToken::new();

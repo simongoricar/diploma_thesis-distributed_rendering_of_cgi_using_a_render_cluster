@@ -100,8 +100,9 @@ impl WorkerAutomaticQueue {
             };
 
             info!(
-                "Spawning new frame renderer: job {}, frame {}",
-                frame.job.job_name, frame.frame_index
+                job_name = frame.job.job_name,
+                frame_index = frame.frame_index,
+                "Starting to render new frame."
             );
 
             Self::render_frame_and_report_through_websocket(
@@ -138,28 +139,38 @@ impl WorkerAutomaticQueue {
         }
 
         let render_result = runner.render_frame(job.clone(), frame_index).await;
+
         match render_result {
             Ok(_) => {
-                info!(
-                    "Frame has been successfully rendered: {}, frame {}.",
-                    job_name, frame_index
-                );
-
                 // Report back to master that we finished this frame.
                 let send_result = sender_handle
                     .send_message(WorkerFrameQueueItemFinishedEvent::new_ok(
-                        job_name,
+                        job_name.clone(),
                         frame_index,
                     ))
                     .await
                     .wrap_err_with(|| miette!("Failed to send frame finished event."));
 
                 if let Err(error) = send_result {
-                    error!("Errored: {}", error);
+                    error!(
+                        error = ?error,
+                        job_name = job_name,
+                        frame_index = frame_index,
+                        "Frame has been successfully rendered, but we failed to report that to the master server!"
+                    );
+                } else {
+                    info!(
+                        job_name = job_name,
+                        frame_index = frame_index,
+                        "Frame has been successfully rendered and progress has been reported to the master server."
+                    );
                 }
             }
             Err(error) => {
-                error!("Errored while rendering frame: {:?}", error);
+                error!(
+                    error = ?error,
+                    "Frame failed to render!"
+                );
             }
         }
 

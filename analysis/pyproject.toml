@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "diploma-trace-analysis"
+version = "1.0.0"
+description = ""
+authors = ["Simon Goričar <simon.peter.goricar@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+matplotlib = "^3.7.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

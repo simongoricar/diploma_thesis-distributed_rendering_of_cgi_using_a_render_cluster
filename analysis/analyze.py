@@ -1,93 +1,56 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Tuple, Self, Dict, Any
+from typing import Optional, List, Self, Dict
 
 import matplotlib as mpl
 import matplotlib.pyplot as plot
 
 from core.trace import FullTrace, WorkerTrace, WorkerFrameTrace, FrameDistributionStrategy
 
-RAW_DATA_DIR = Path("./raw-data")
-SIMPLE_PROJECT_DIR = Path("../blender-projects/01_simple-animation")
+PROJECT_DIR = Path("../blender-projects/04_very-simple")
+PROJECT_RESULTS_DIR = PROJECT_DIR / "results/arnes-results"
 
-
-
-# List of tuples containing two paths:
-#  - path to the raw trace (JSON) file
-#  - path to the associated job definition (TOML) file that was used in the run
-TRACE_PATHS: List[Tuple[Path, Path]] = [
-    # 01 simple animation (600 frames)
-
-    ## 1 worker
-    ### naive coarse (all frames at once)
-    #### TODO
-
-    ## 5 workers
-    ### naive fine
-    (
-        RAW_DATA_DIR / "2023-06-13_13-23-30_job-01_simple-animation_measuring_600f-5w_naive-fine_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-5w_naive-fine.toml"
-    ),
-    ### naive coarse
-    (
-        RAW_DATA_DIR / "2023-06-15_12-17-07_job-01_simple-animation_measuring_600f-5w_naive-coarse_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-5w_naive-coarse.toml"
-    ),
-    ### dynamic
-    (
-        RAW_DATA_DIR / "2023-06-13_13-23-52_job-01_simple-animation_measuring_600f-5w_dynamic_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-5w_dynamic.toml"
-    ),
-
-    ## 10 workers
-    ### naive fine
-    (
-        RAW_DATA_DIR / "2023-06-13_13-24-22_job-01_simple-animation_measuring_600f-10w_naive-fine_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-10w_naive-fine.toml"
-    ),
-    ### naive coarse
-    (
-        RAW_DATA_DIR / "2023-06-14_11-48-21_job-01_simple-animation_measuring_600f-10w_naive-coarse_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-10w_naive-coarse.toml"
-    ),
-    ### dynamic
-    (
-        RAW_DATA_DIR / "2023-06-13_13-24-29_job-01_simple-animation_measuring_600f-10w_dynamic_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-10w_dynamic.toml"
-    ),
-    ## 20 workers
-    ### naive fine
-    (
-        RAW_DATA_DIR / "2023-06-13_13-31-33_job-01_simple-animation_measuring_600f-20w_naive-fine_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-20w_naive-fine.toml"
-    ),
-    (
-        RAW_DATA_DIR / "2023-06-14_11-49-06_job-01_simple-animation_measuring_600f-20w_naive-fine_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-20w_naive-fine.toml"
-    ),
-    ### naive coarse
-    (
-        RAW_DATA_DIR / "2023-06-13_13-31-43_job-01_simple-animation_measuring_600f-20w_naive-coarse_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-20w_naive-coarse.toml"
-    ),
-    ### dynamic
-    (
-        RAW_DATA_DIR / "2023-06-13_13-31-48_job-01_simple-animation_measuring_600f-20w_dynamic_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-20w_dynamic.toml"
-    ),
-    (
-        RAW_DATA_DIR / "2023-06-14_11-49-12_job-01_simple-animation_measuring_600f-20w_dynamic_raw-trace.json",
-        SIMPLE_PROJECT_DIR / "01-simple-animation_measuring_600f-20w_dynamic.toml"
-    ),
-]
-
+# List of paths to the raw trace (JSON) files.
+TRACE_PATHS: List[Path] = list(PROJECT_RESULTS_DIR.glob("*_raw-trace.json"))
 TRACES: List[FullTrace] = [
-    FullTrace.load_from_trace_and_job_definition_file(trace_file_path, job_definition_file_path)
-    for (trace_file_path, job_definition_file_path)
-    in TRACE_PATHS
+    FullTrace.load_from_trace_file(trace_file_path)
+    for trace_file_path in TRACE_PATHS
 ]
 
+
+def show_amount_of_results():
+    VALID_CLUSTER_SIZES: List[int] = [1, 5, 10, 20, 40, 80]
+
+    for size in VALID_CLUSTER_SIZES:
+        print(f"-- {size} {'worker' if size == 1 else 'workers'} --")
+
+        num_naive_fine = len(list(
+            run
+            for run in TRACES
+            if run.job.wait_for_number_of_workers == size
+            and run.job.frame_distribution_strategy == FrameDistributionStrategy.NAIVE_FINE
+        ))
+
+        num_eager_naive_coarse = len(list(
+            run
+            for run in TRACES
+            if run.job.wait_for_number_of_workers == size
+            and run.job.frame_distribution_strategy == FrameDistributionStrategy.EAGER_NAIVE_COARSE
+        ))
+
+        num_dynamic = len(list(
+            run
+            for run in TRACES
+            if run.job.wait_for_number_of_workers == size
+            and run.job.frame_distribution_strategy == FrameDistributionStrategy.DYNAMIC
+        ))
+
+        print(f"   naive fine:          {num_naive_fine}")
+        print(f"   eager naive coarse:  {num_eager_naive_coarse}")
+        print(f"   dynamic:             {num_dynamic}")
+
+        print()
 
 
 @dataclass
@@ -116,8 +79,8 @@ class WorkerUtilization:
         total_time: float = total_timedelta.total_seconds()
 
         total_timedelta_excluding_setup_and_teardown: timedelta = \
-            worker_trace.frame_render_traces[len(worker_trace.frame_render_traces) - 1].frame_finish_time \
-            - worker_trace.frame_render_traces[0].frame_start_time
+            worker_trace.frame_render_traces[len(worker_trace.frame_render_traces) - 1].finish_time() \
+            - worker_trace.frame_render_traces[0].start_time()
         total_time_excluding_setup_and_teardown: float = total_timedelta_excluding_setup_and_teardown.total_seconds()
 
         total_idle_time: float = 0
@@ -130,8 +93,8 @@ class WorkerUtilization:
             index: int
             frame_trace: WorkerFrameTrace
 
-            frame_start_time: datetime = frame_trace.frame_start_time
-            frame_finish_time: datetime = frame_trace.frame_finish_time
+            frame_start_time: datetime = frame_trace.start_time()
+            frame_finish_time: datetime = frame_trace.finish_time()
 
             total_active_time += (frame_finish_time - frame_start_time).total_seconds()
 
@@ -141,7 +104,7 @@ class WorkerUtilization:
                 total_idle_time += idle_time_before_first_frame.total_seconds()
             elif index + 1 == len(worker_trace.frame_render_traces):
                 previous_frame = worker_trace.frame_render_traces[index - 1]
-                previous_frame_finish_time: datetime = previous_frame.frame_finish_time
+                previous_frame_finish_time: datetime = previous_frame.finish_time()
 
                 idle_time_between_last_two_frames = frame_start_time - previous_frame_finish_time
                 idle_time_after_last_frame = (job_finish_time - frame_finish_time).total_seconds()
@@ -150,7 +113,7 @@ class WorkerUtilization:
                 total_idle_time += idle_time_after_last_frame
             else:
                 previous_frame = worker_trace.frame_render_traces[index - 1]
-                previous_frame_finish_time: datetime = previous_frame.frame_finish_time
+                previous_frame_finish_time: datetime = previous_frame.finish_time()
 
                 idle_time_between_frames = frame_start_time - previous_frame_finish_time
 
@@ -167,7 +130,6 @@ class WorkerUtilization:
         )
 
 
-
 def analyze_utilization():
     utilization_per_strategy: Dict[FrameDistributionStrategy, List[float]] = {
         FrameDistributionStrategy.NAIVE_FINE: [],
@@ -177,7 +139,7 @@ def analyze_utilization():
 
     print("Overall results (per-run):")
     for run_trace in TRACES:
-        print(f"Run {run_trace.job_name} ({run_trace.number_of_workers}):")
+        print(f"Run {run_trace.job.job_name} ({run_trace.job.wait_for_number_of_workers}):")
 
         utilization_per_worker: List[WorkerUtilization] = [
             WorkerUtilization.from_worker_trace(worker_trace)
@@ -188,7 +150,7 @@ def analyze_utilization():
         min_utilization = min([u.utilization_rate() for u in utilization_per_worker])
         average_utilization = sum([u.utilization_rate() for u in utilization_per_worker]) / len(utilization_per_worker)
 
-        utilization_per_strategy[run_trace.distribution_strategy].append(average_utilization)
+        utilization_per_strategy[run_trace.job.frame_distribution_strategy].append(average_utilization)
 
         print(f"  max utilization: {max_utilization}")
         print(f"  average utilization: {average_utilization}")
@@ -208,20 +170,20 @@ def analyze_tail_delay():
         naive_fine_results = [
             run
             for run in TRACES
-            if run.distribution_strategy == FrameDistributionStrategy.NAIVE_FINE
-               and run.number_of_workers == cluster_size
+            if run.job.frame_distribution_strategy == FrameDistributionStrategy.NAIVE_FINE
+            and run.job.wait_for_number_of_workers == cluster_size
         ]
         naive_coarse_results = [
             run
             for run in TRACES
-            if run.distribution_strategy == FrameDistributionStrategy.EAGER_NAIVE_COARSE
-               and run.number_of_workers == cluster_size
+            if run.job.frame_distribution_strategy == FrameDistributionStrategy.EAGER_NAIVE_COARSE
+            and run.job.wait_for_number_of_workers == cluster_size
         ]
         dynamic_results = [
             run
             for run in TRACES
-            if run.distribution_strategy == FrameDistributionStrategy.DYNAMIC
-               and run.number_of_workers == cluster_size
+            if run.job.frame_distribution_strategy == FrameDistributionStrategy.DYNAMIC
+            and run.job.wait_for_number_of_workers == cluster_size
         ]
 
         # naive fine
@@ -262,22 +224,21 @@ def analyze_duration():
         naive_fine_results = [
             run
             for run in TRACES
-            if run.distribution_strategy == FrameDistributionStrategy.NAIVE_FINE
-               and run.number_of_workers == cluster_size
+            if run.job.frame_distribution_strategy == FrameDistributionStrategy.NAIVE_FINE
+               and run.job.wait_for_number_of_workers == cluster_size
         ]
         naive_coarse_results = [
             run
             for run in TRACES
-            if run.distribution_strategy == FrameDistributionStrategy.EAGER_NAIVE_COARSE
-               and run.number_of_workers == cluster_size
+            if run.job.frame_distribution_strategy == FrameDistributionStrategy.EAGER_NAIVE_COARSE
+               and run.job.wait_for_number_of_workers == cluster_size
         ]
         dynamic_results = [
             run
             for run in TRACES
-            if run.distribution_strategy == FrameDistributionStrategy.DYNAMIC
-               and run.number_of_workers == cluster_size
+            if run.job.frame_distribution_strategy == FrameDistributionStrategy.DYNAMIC
+               and run.job.wait_for_number_of_workers == cluster_size
         ]
-
 
         # Naive fine
         naive_fine_average_duration = sum([
@@ -301,8 +262,11 @@ def analyze_duration():
         print(f"  dynamic average duration:      {dynamic_average_duration}")
 
 
-
 if __name__ == '__main__':
+    show_amount_of_results()
+
+    print("====")
+
     analyze_utilization()
     analyze_duration()
     analyze_tail_delay()

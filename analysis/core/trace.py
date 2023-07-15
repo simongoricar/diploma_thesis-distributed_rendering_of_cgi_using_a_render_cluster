@@ -18,7 +18,7 @@ class FrameDistributionStrategy(Enum):
 
         if strategy_type == "naive-fine":
             return FrameDistributionStrategy.NAIVE_FINE
-        elif strategy_type == "naive-coarse":
+        elif strategy_type == "eager-naive-coarse":
             return FrameDistributionStrategy.EAGER_NAIVE_COARSE
         elif strategy_type == "dynamic":
             return FrameDistributionStrategy.DYNAMIC
@@ -76,6 +76,12 @@ class WorkerFrameTrace:
             file_saving_finished_at=file_saving_finished_at,
             exited_process_at=exited_process_at,
         )
+
+    def start_time(self) -> datetime:
+        return self.started_process_at
+
+    def finish_time(self) -> datetime:
+        return self.exited_process_at
 
 
 @dataclass

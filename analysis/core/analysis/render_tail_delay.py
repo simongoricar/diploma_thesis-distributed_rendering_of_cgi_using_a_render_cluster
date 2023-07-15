@@ -4,7 +4,7 @@ from core.models import FullTrace, FrameDistributionStrategy
 
 
 def analyze_tail_delay(traces: List[FullTrace]):
-    for cluster_size in [5, 10, 20]:
+    for cluster_size in [1, 5, 10, 20, 40, 80]:
         print(f"Cluster size: {cluster_size}")
         naive_fine_results = [
             run
@@ -25,6 +25,10 @@ def analyze_tail_delay(traces: List[FullTrace]):
             and run.job.wait_for_number_of_workers == cluster_size
         ]
 
+        if len(naive_fine_results) == 0 or len(naive_coarse_results) == 0 or len(dynamic_results) == 0:
+            print("  insufficient tests")
+            continue
+            
         # naive fine
         naive_fine_max_tail_delay = sum([
             max([

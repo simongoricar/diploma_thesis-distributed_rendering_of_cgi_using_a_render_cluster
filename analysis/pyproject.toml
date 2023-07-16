@@ -8,6 +8,8 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 matplotlib = "^3.7.1"
+pympler = "^1.0.1"
+pywin32 = "^306"
 
 
 [build-system]

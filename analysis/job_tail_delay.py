@@ -59,8 +59,16 @@ def plot_tail_delay_for_cluster(
         patch_artist=True,
     )
 
-    plot.set_xlabel("Zamik v sekundah")
-    plot.set_ylabel("Porazdeljevalna strategija")
+    plot.set_ylabel(
+        "Zamik v sekundah",
+        labelpad=12,
+        fontsize="medium",
+    )
+    plot.set_xlabel(
+        "Porazdeljevalna strategija",
+        labelpad=12,
+        fontsize="medium",
+    )
 
     plot.set_ybound(
         lower=0,
@@ -84,7 +92,11 @@ def plot_tail_delay_for_cluster(
         patch: Patch
         patch.set_facecolor(color)
 
-    plot.set_title(f"Repni zamik ({cluster_size} delovnih vozlišč)")
+    plot.set_title(
+        f"Repni zamik ({cluster_size} delovnih vozlišč)",
+        pad=24,
+        fontsize="x-large",
+    )
 
 
 
@@ -101,7 +113,7 @@ def plot_tail_delay(
     def plot_and_save(
         cluster_size: int,
     ):
-        figure = plt.figure(figsize=(20, 12), dpi=100, layout="constrained")
+        figure = plt.figure(figsize=(7, 5), dpi=100, layout="constrained")
         plot = figure.add_subplot(label=f"td-{cluster_size}")
 
         plot_tail_delay_for_cluster(

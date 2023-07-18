@@ -1,9 +1,10 @@
 from typing import List
 
-from core.models import FullTrace, FrameDistributionStrategy
+from core.models import JobTrace, FrameDistributionStrategy
+from core.parser import load_traces_from_default_path
 
 
-def analyze_duration(traces: List[FullTrace]):
+def analyze_duration(traces: List[JobTrace]):
     for cluster_size in [1, 5, 10, 20, 40, 80]:
         print(f"Cluster size: {cluster_size}")
 
@@ -50,3 +51,12 @@ def analyze_duration(traces: List[FullTrace]):
             for run in dynamic_results
         ]) / len(dynamic_results)
         print(f"  dynamic average duration:      {dynamic_average_duration}")
+
+
+def main():
+    traces = load_traces_from_default_path()
+    analyze_duration(traces)
+
+
+if __name__ == '__main__':
+    main()

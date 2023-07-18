@@ -40,7 +40,7 @@ class FrameDistributionStrategy(Enum):
             raise RuntimeError(f"Invalid strategy type: {strategy_type}!")
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class WorkerFrameTrace:
     frame_index: int
 
@@ -84,7 +84,7 @@ class WorkerFrameTrace:
         return self.exited_process_at
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class WorkerPingTrace:
     pinged_at: datetime
     received_at: datetime
@@ -99,7 +99,7 @@ class WorkerPingTrace:
             received_at=received_at,
         )
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class WorkerReconnectionTrace:
     lost_connection_at: datetime
     reconnected_at: datetime
@@ -115,7 +115,7 @@ class WorkerReconnectionTrace:
         )
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class WorkerTrace:
     total_queued_frames: int
     total_queued_frames_removed_from_queue: int
@@ -171,7 +171,7 @@ class WorkerTrace:
 
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class BlenderJob:
     job_name: str
     job_description: Optional[str]
@@ -227,8 +227,8 @@ class BlenderJob:
 
 
 
-@dataclass
-class FullTrace:
+@dataclass(slots=True, frozen=True)
+class JobTrace:
     job: BlenderJob
 
     job_started_at: datetime

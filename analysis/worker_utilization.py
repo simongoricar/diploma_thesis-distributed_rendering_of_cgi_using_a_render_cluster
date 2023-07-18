@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Self
 
-from core.models import FullTrace, FrameDistributionStrategy, WorkerFrameTrace, WorkerTrace
+from core.models import JobTrace, FrameDistributionStrategy, WorkerFrameTrace, WorkerTrace
+from core.parser import load_traces_from_default_path
 
 
 @dataclass
@@ -82,7 +83,7 @@ class WorkerUtilization:
         )
 
 
-def analyze_utilization(traces: List[FullTrace]):
+def analyze_utilization(traces: List[JobTrace]):
     utilization_per_strategy: Dict[FrameDistributionStrategy, List[float]] = {
         FrameDistributionStrategy.NAIVE_FINE: [],
         FrameDistributionStrategy.EAGER_NAIVE_COARSE: [],
@@ -115,3 +116,11 @@ def analyze_utilization(traces: List[FullTrace]):
         real_average_utilization = sum(average_values) / len(average_values)
         print(f"Strategy: {strategy} -> average utilization: {real_average_utilization}")
 
+
+def main():
+    traces = load_traces_from_default_path()
+    analyze_utilization(traces)
+
+
+if __name__ == '__main__':
+    main()

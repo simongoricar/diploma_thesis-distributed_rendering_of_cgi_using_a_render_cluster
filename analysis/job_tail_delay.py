@@ -75,14 +75,14 @@ def plot_tail_delay_for_cluster(
         upper=plot_y_maximum
     )
 
-    plot.grid(visible=True)
+    plot.grid(visible=True, axis="y")
 
     plot.set_xticks(
         [1, 2, 3],
         labels=[
-            "Naivno drobnozrnato",
-            "Takojšnje naivno grobozrnato",
-            "Dinamično s krajo"
+            "Naivna drobnozrnata",
+            "Takojšnja naivna grobozrnata",
+            "Dinamična s krajo"
         ],
         rotation=3,
     )

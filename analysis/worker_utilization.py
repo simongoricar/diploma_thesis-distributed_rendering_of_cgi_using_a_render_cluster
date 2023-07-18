@@ -102,7 +102,7 @@ def plot_utilization_rate_against_cluster_size(
 
         utilization_columns.append((
             size_specific_utilization_values,
-            f"{cluster_size} vozlišč"
+            f"{cluster_size}"
         ))
 
 
@@ -127,7 +127,7 @@ def plot_utilization_rate_against_cluster_size(
         fontsize="medium",
     )
     plot.set_xlabel(
-        "Velikost gruče",
+        "Velikost gruče (št. delovnih vozlišč)",
         labelpad=12,
         fontsize="medium",
     )
@@ -137,12 +137,12 @@ def plot_utilization_rate_against_cluster_size(
         upper=1,
     )
 
-    plot.grid(visible=True)
+    plot.grid(visible=True, axis="y")
 
     plot.set_xticks(
         list(range(1, len(utilization_columns) + 1)),
         labels=[label for (_, label) in utilization_columns],
-        rotation=3,
+        fontsize="medium"
     )
 
     # TODO

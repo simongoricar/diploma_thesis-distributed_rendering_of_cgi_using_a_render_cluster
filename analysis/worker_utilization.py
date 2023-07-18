@@ -1,9 +1,14 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Self
+from typing import List, Dict, Optional, Self, Tuple
+
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import Axes
+from matplotlib.patches import Patch
 
 from core.models import JobTrace, FrameDistributionStrategy, WorkerFrameTrace, WorkerTrace
 from core.parser import load_traces_from_default_path
+from core.paths import WORKER_UTILIZATION_OUTPUT_DIRECTORY
 
 
 @dataclass
@@ -82,7 +87,86 @@ class WorkerUtilization:
             idle_after_last_frame=idle_time_after_last_frame,
         )
 
+def plot_utilization_rate_against_cluster_size(
+    traces: List[JobTrace]
+):
+    cluster_sizes = [1, 5, 10, 20, 40, 80]
 
+    utilization_columns: List[Tuple[List[float], str]] = []
+    for cluster_size in cluster_sizes:
+        size_specific_utilization_values = [
+            WorkerUtilization.from_worker_trace(worker).utilization_rate()
+            for trace in traces
+            for worker in trace.worker_traces.values()
+        ]
+
+        utilization_columns.append((
+            size_specific_utilization_values,
+            f"{cluster_size} vozlišč"
+        ))
+
+
+    figure = plt.figure(figsize=(7, 5), dpi=100, layout="constrained")
+    plot: Axes = figure.add_subplot(label="utilization-against-cluster-size")
+
+    # plot.boxplot(
+    #     [data for (data, _) in utilization_columns],
+    #     vert=True,
+    #     patch_artist=True,
+    # )
+
+    plot.violinplot(
+        [data for (data, _) in utilization_columns],
+        vert=True,
+        showmedians=True,
+    )
+
+    plot.set_ylabel(
+        "Izkoriščenost $[0, 1]$",
+        labelpad=12,
+        fontsize="medium",
+    )
+    plot.set_xlabel(
+        "Velikost gruče",
+        labelpad=12,
+        fontsize="medium",
+    )
+
+    plot.set_ybound(
+        lower=0.95,
+        upper=1,
+    )
+
+    plot.grid(visible=True)
+
+    plot.set_xticks(
+        list(range(1, len(utilization_columns) + 1)),
+        labels=[label for (_, label) in utilization_columns],
+        rotation=3,
+    )
+
+    # TODO
+
+    plot.set_title(
+        "Izkoriščenost glede na velikost gruče",
+        pad=24,
+        fontsize="x-large"
+    )
+
+
+    figure.savefig(
+        WORKER_UTILIZATION_OUTPUT_DIRECTORY / f"worker-utilization_against_cluster-size.png",
+        dpi=100,
+    )
+
+def plot_utilization_rate_against_strategy(
+    traces: List[JobTrace]
+):
+    # TODO
+    pass
+
+
+# DEPRECATED
 def analyze_utilization(traces: List[JobTrace]):
     utilization_per_strategy: Dict[FrameDistributionStrategy, List[float]] = {
         FrameDistributionStrategy.NAIVE_FINE: [],
@@ -119,7 +203,9 @@ def analyze_utilization(traces: List[JobTrace]):
 
 def main():
     traces = load_traces_from_default_path()
-    analyze_utilization(traces)
+
+    with plt.style.context("seaborn-v0_8-paper"):
+        plot_utilization_rate_against_cluster_size(traces)
 
 
 if __name__ == '__main__':

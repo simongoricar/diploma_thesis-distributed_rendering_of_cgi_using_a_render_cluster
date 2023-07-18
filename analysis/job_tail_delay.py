@@ -84,7 +84,7 @@ def plot_tail_delay_for_cluster(
             "Takojšnje naivno grobozrnato",
             "Dinamično s krajo"
         ],
-        rotation=6,
+        rotation=3,
     )
 
     patch_colours = ["mediumaquamarine", "lightskyblue", "palegoldenrod"]
@@ -124,7 +124,7 @@ def plot_tail_delay(
         )
 
         figure.savefig(
-            JOB_TAIL_DELAY_OUTPUT_DIRECTORY / f"job-tail-delay_{cluster_size:02}-workers",
+            JOB_TAIL_DELAY_OUTPUT_DIRECTORY / f"job-tail-delay_{cluster_size:02}-workers.png",
             dpi=100,
         )
 
@@ -137,7 +137,9 @@ def plot_tail_delay(
 
 def main():
     traces = load_traces_from_default_path()
-    plot_tail_delay(traces)
+
+    with plt.style.context("seaborn-v0_8-paper"):
+        plot_tail_delay(traces)
 
 
 if __name__ == '__main__':

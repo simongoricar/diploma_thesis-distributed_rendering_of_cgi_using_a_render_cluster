@@ -30,36 +30,44 @@ def parse_cli_arguments() -> CLIArguments:
 
 
 
-def show_amount_of_results(traces: List[JobTrace]):
+def show_results_statistics(traces: List[JobTrace]):
     VALID_CLUSTER_SIZES: List[int] = [1, 5, 10, 20, 40, 80]
 
     for size in VALID_CLUSTER_SIZES:
         print(f"-- {size} {'worker' if size == 1 else 'workers'} --")
 
-        num_naive_fine = len(list(
+        naive_fine_runs = list(
             run
             for run in traces
             if run.job.wait_for_number_of_workers == size
             and run.job.frame_distribution_strategy == FrameDistributionStrategy.NAIVE_FINE
-        ))
+        )
+        naive_fine_reconnects = sum([len(worker.reconnection_traces) for job in naive_fine_runs for worker in job.worker_traces.values()])
+        num_naive_fine_runs = len(naive_fine_runs)
 
-        num_eager_naive_coarse = len(list(
+        eager_naive_coarse_runs = list(
             run
             for run in traces
             if run.job.wait_for_number_of_workers == size
             and run.job.frame_distribution_strategy == FrameDistributionStrategy.EAGER_NAIVE_COARSE
-        ))
+        )
+        eager_naive_coarse_reconnects = sum([len(worker.reconnection_traces) for job in eager_naive_coarse_runs for worker in job.worker_traces.values()])
+        num_eager_naive_coarse_runs = len(eager_naive_coarse_runs)
 
-        num_dynamic = len(list(
+        dynamic_runs = list(
             run
             for run in traces
             if run.job.wait_for_number_of_workers == size
             and run.job.frame_distribution_strategy == FrameDistributionStrategy.DYNAMIC
-        ))
+        )
+        dynamic_reconnects = sum(
+            [len(worker.reconnection_traces) for job in dynamic_runs for worker in
+             job.worker_traces.values()])
+        num_dynamic_runs = len(dynamic_runs)
 
-        print(f"   naive fine:          {num_naive_fine}")
-        print(f"   eager naive coarse:  {num_eager_naive_coarse}")
-        print(f"   dynamic:             {num_dynamic}")
+        print(f"   naive fine:          {num_naive_fine_runs} ({naive_fine_reconnects} reconnects)")
+        print(f"   eager naive coarse:  {num_eager_naive_coarse_runs} ({eager_naive_coarse_reconnects} reconnects)")
+        print(f"   dynamic:             {num_dynamic_runs} ({dynamic_reconnects} reconnects)")
 
         print()
 
@@ -83,7 +91,7 @@ def main():
         print()
         print()
 
-    show_amount_of_results(traces)
+    show_results_statistics(traces)
 
 
 if __name__ == '__main__':

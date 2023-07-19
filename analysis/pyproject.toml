@@ -10,6 +10,7 @@ python = "^3.11"
 matplotlib = "^3.7.1"
 pympler = "^1.0.1"
 pywin32 = "^306"
+dill = "^0.3.6"
 
 
 [build-system]

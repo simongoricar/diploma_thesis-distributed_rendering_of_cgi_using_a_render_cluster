@@ -60,7 +60,7 @@ def plot_tail_delay_for_cluster(
     )
 
     plot.set_ylabel(
-        "Zamik v sekundah",
+        "Repni zamik v sekundah",
         labelpad=12,
         fontsize="medium",
     )

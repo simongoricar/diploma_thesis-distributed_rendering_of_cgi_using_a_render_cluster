@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Self, Tuple
+from typing import List, Optional, Self, Tuple
 
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import Axes
-from matplotlib.patches import Patch
+from matplotlib.ticker import AutoMinorLocator
+from matplotlib.text import Text
 
 from core.models import JobTrace, FrameDistributionStrategy, WorkerFrameTrace, WorkerTrace
 from core.parser import load_traces_from_default_path
@@ -87,7 +88,8 @@ class WorkerUtilization:
             idle_after_last_frame=idle_time_after_last_frame,
         )
 
-def plot_utilization_rate_against_cluster_size(
+
+def plot_utilization_rate_against_cluster_sizes(
     traces: List[JobTrace]
 ):
     cluster_sizes = [1, 5, 10, 20, 40, 80]
@@ -98,6 +100,7 @@ def plot_utilization_rate_against_cluster_size(
             WorkerUtilization.from_worker_trace(worker).utilization_rate()
             for trace in traces
             for worker in trace.worker_traces.values()
+            if trace.job.wait_for_number_of_workers == cluster_size
         ]
 
         utilization_columns.append((
@@ -109,20 +112,23 @@ def plot_utilization_rate_against_cluster_size(
     figure = plt.figure(figsize=(7, 5), dpi=100, layout="constrained")
     plot: Axes = figure.add_subplot(label="utilization-against-cluster-size")
 
-    # plot.boxplot(
-    #     [data for (data, _) in utilization_columns],
-    #     vert=True,
-    #     patch_artist=True,
-    # )
 
+    # Plot and add x-axis ticks.
     plot.violinplot(
         [data for (data, _) in utilization_columns],
         vert=True,
         showmedians=True,
     )
 
+    plot.set_xticks(
+        list(range(1, len(utilization_columns) + 1)),
+        labels=[label for (_, label) in utilization_columns],
+        fontsize="medium"
+    )
+
+    # Add x and y labels.
     plot.set_ylabel(
-        "Izkoriščenost $[0, 1]$",
+        r"Izkoriščenost $\in [0, 1]$",
         labelpad=12,
         fontsize="medium",
     )
@@ -137,15 +143,20 @@ def plot_utilization_rate_against_cluster_size(
         upper=1,
     )
 
+
+    # Add 0.01 minor ticks
+    plot.yaxis.set_minor_locator(AutoMinorLocator(5))
+
+    # Make 0.95 and 1 (lower and upper y bound) bold to emphasize that
+    # the plot doesn't start at 0.
+    major_tick_labels = plot.get_ymajorticklabels()
+    major_tick_labels_to_emphasize = [major_tick_labels[0], major_tick_labels[-1]]
+    for tick_label in major_tick_labels_to_emphasize:
+        tick_label: Text
+        tick_label.set_fontweight("bold")
+
     plot.grid(visible=True, axis="y")
 
-    plot.set_xticks(
-        list(range(1, len(utilization_columns) + 1)),
-        labels=[label for (_, label) in utilization_columns],
-        fontsize="medium"
-    )
-
-    # TODO
 
     plot.set_title(
         "Izkoriščenost glede na velikost gruče",
@@ -155,57 +166,113 @@ def plot_utilization_rate_against_cluster_size(
 
 
     figure.savefig(
-        WORKER_UTILIZATION_OUTPUT_DIRECTORY / f"worker-utilization_against_cluster-size.png",
+        WORKER_UTILIZATION_OUTPUT_DIRECTORY
+        / f"worker-utilization_against_cluster-size.png",
         dpi=100,
     )
 
-def plot_utilization_rate_against_strategy(
+
+def plot_utilization_rate_against_strategies(
     traces: List[JobTrace]
 ):
-    # TODO
-    pass
+    strategies = [
+        FrameDistributionStrategy.NAIVE_FINE,
+        FrameDistributionStrategy.EAGER_NAIVE_COARSE,
+        FrameDistributionStrategy.DYNAMIC,
+    ]
 
-
-# DEPRECATED
-def analyze_utilization(traces: List[JobTrace]):
-    utilization_per_strategy: Dict[FrameDistributionStrategy, List[float]] = {
-        FrameDistributionStrategy.NAIVE_FINE: [],
-        FrameDistributionStrategy.EAGER_NAIVE_COARSE: [],
-        FrameDistributionStrategy.DYNAMIC: [],
-    }
-
-    print("Overall results (per-run):")
-    for run_trace in traces:
-        print(f"Run {run_trace.job.job_name} ({run_trace.job.wait_for_number_of_workers}):")
-
-        utilization_per_worker: List[WorkerUtilization] = [
-            WorkerUtilization.from_worker_trace(worker_trace)
-            for worker_trace in run_trace.worker_traces.values()
+    strategy_columns: List[Tuple[List[float], str]] = []
+    for strategy in strategies:
+        size_specific_utilization_values = [
+            WorkerUtilization.from_worker_trace(worker).utilization_rate()
+            for trace in traces
+            for worker in trace.worker_traces.values()
+            if trace.job.frame_distribution_strategy == strategy
         ]
 
-        max_utilization = max([u.utilization_rate() for u in utilization_per_worker])
-        min_utilization = min([u.utilization_rate() for u in utilization_per_worker])
-        average_utilization = sum([u.utilization_rate() for u in utilization_per_worker]) / len(utilization_per_worker)
+        strategy_name: str
+        if strategy == FrameDistributionStrategy.NAIVE_FINE:
+            strategy_name = "Naivna drobnozrnata"
+        elif strategy == FrameDistributionStrategy.EAGER_NAIVE_COARSE:
+            strategy_name = "Takojšnja naivna grobozrnata"
+        elif strategy == FrameDistributionStrategy.DYNAMIC:
+            strategy_name = "Dinamična s krajo"
+        else:
+            raise RuntimeError("Invalid distribution strategy.")
 
-        utilization_per_strategy[run_trace.job.frame_distribution_strategy].append(average_utilization)
+        strategy_columns.append((
+            size_specific_utilization_values,
+            f"{strategy_name}"
+        ))
 
-        print(f"  max utilization: {max_utilization}")
-        print(f"  average utilization: {average_utilization}")
-        print(f"  min utilization: {min_utilization}")
+    figure = plt.figure(figsize=(7, 5), dpi=100, layout="constrained")
+    plot: Axes = figure.add_subplot(label="utilization-against-strategy")
 
-    print(f"\n{'-' * 20}\n")
-    print("Overall average (per-strategy):")
 
-    for strategy, average_values in utilization_per_strategy.items():
-        real_average_utilization = sum(average_values) / len(average_values)
-        print(f"Strategy: {strategy} -> average utilization: {real_average_utilization}")
+    # Plot and add x-axis ticks.
+    plot.violinplot(
+        [data for (data, _) in strategy_columns],
+        vert=True,
+        showmedians=True,
+    )
+
+    plot.set_xticks(
+        list(range(1, len(strategy_columns) + 1)),
+        labels=[label for (_, label) in strategy_columns],
+        fontsize="medium"
+    )
+
+    # Add x and y labels.
+    plot.set_ylabel(
+        r"Izkoriščenost $\in [0, 1]$",
+        labelpad=12,
+        fontsize="medium",
+    )
+    plot.set_xlabel(
+        "Porazdeljevalna strategija",
+        labelpad=12,
+        fontsize="medium",
+    )
+
+    plot.set_ybound(
+        lower=0.95,
+        upper=1,
+    )
+
+
+    # Add 0.01 minor ticks
+    plot.yaxis.set_minor_locator(AutoMinorLocator(5))
+
+    # Make 0.95 and 1 (lower and upper y bound) bold to emphasize that
+    # the plot doesn't start at 0.
+    major_tick_labels = plot.get_ymajorticklabels()
+    major_tick_labels_to_emphasize = [major_tick_labels[0], major_tick_labels[-1]]
+    for tick_label in major_tick_labels_to_emphasize:
+        tick_label: Text
+        tick_label.set_fontweight("bold")
+
+    plot.grid(visible=True, axis="y")
+
+
+    plot.set_title(
+        "Izkoriščenost glede na tip porazdeljevalne strategije",
+        pad=24,
+        fontsize="x-large"
+    )
+
+    figure.savefig(
+        WORKER_UTILIZATION_OUTPUT_DIRECTORY
+        / f"worker-utilization_against_distribution-strategy.png",
+        dpi=100,
+    )
 
 
 def main():
     traces = load_traces_from_default_path()
 
     with plt.style.context("seaborn-v0_8-paper"):
-        plot_utilization_rate_against_cluster_size(traces)
+        plot_utilization_rate_against_cluster_sizes(traces)
+        plot_utilization_rate_against_strategies(traces)
 
 
 if __name__ == '__main__':

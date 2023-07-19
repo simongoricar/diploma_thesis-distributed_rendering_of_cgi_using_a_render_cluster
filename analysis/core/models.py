@@ -100,6 +100,10 @@ class WorkerPingTrace:
             received_at=received_at,
         )
 
+    def latency(self) -> float:
+        latency: float = (self.received_at - self.pinged_at).total_seconds()
+        return max(0.0, latency)
+
 @dataclass(slots=True, frozen=True)
 class WorkerReconnectionTrace:
     lost_connection_at: datetime

@@ -3,7 +3,7 @@ from typing import List, Tuple
 
 import matplotlib.pyplot as plt
 from matplotlib.container import BarContainer
-from matplotlib.patches import Patch, Rectangle
+from matplotlib.patches import Rectangle
 from matplotlib.pyplot import Axes, Figure
 from matplotlib.ticker import AutoMinorLocator
 
@@ -15,8 +15,6 @@ from core.paths import JOB_DURATION_OUTPUT_DIRECTORY
 def plot_job_duration_against_cluster_sizes_and_strategies(
     traces: List[JobTrace]
 ):
-    # TODO Modify this to plot into single plot
-    #      (bar plot with three strategies of different colours per x tick)
     cluster_sizes_to_plot = [5, 10, 20, 40, 80]
     strategies_to_plot = [
         FrameDistributionStrategy.NAIVE_FINE,

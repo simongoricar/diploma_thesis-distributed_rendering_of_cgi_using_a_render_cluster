@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from core.models import JobTrace, FrameDistributionStrategy
 from core.parser import load_traces_from_default_path
+from core.timed_context import timed_section
 
 
 @dataclass(slots=True, frozen=True)
@@ -72,6 +73,12 @@ def show_results_statistics(traces: List[JobTrace]):
         print()
 
 
+
+def main_analyze(traces: List[JobTrace]):
+    with timed_section("Statistics"):
+        show_results_statistics(traces)
+
+
 def main():
     args = parse_cli_arguments()
 
@@ -91,7 +98,7 @@ def main():
         print()
         print()
 
-    show_results_statistics(traces)
+    main_analyze(traces)
 
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ from matplotlib.ticker import AutoMinorLocator
 from core.models import JobTrace, FrameDistributionStrategy
 from core.parser import load_traces_from_default_path
 from core.paths import JOB_DURATION_OUTPUT_DIRECTORY
+from core.timed_context import timed_section
 
 
 def plot_job_duration_against_cluster_sizes_and_strategies(
@@ -212,11 +213,16 @@ def analyze_duration(traces: List[JobTrace]):
         print(f"  dynamic average duration:      {dynamic_average_duration}")
 
 
+
+def main_plot(traces: List[JobTrace]):
+    with timed_section("Job Duration"):
+        with plt.style.context("seaborn-v0_8-paper"):
+            plot_job_duration_against_cluster_sizes_and_strategies(traces)
+
+
 def main():
     traces = load_traces_from_default_path()
-
-    with plt.style.context("seaborn-v0_8-paper"):
-        plot_job_duration_against_cluster_sizes_and_strategies(traces)
+    main_plot(traces)
 
 
 if __name__ == '__main__':

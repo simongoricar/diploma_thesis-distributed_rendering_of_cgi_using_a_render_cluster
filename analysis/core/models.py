@@ -169,10 +169,16 @@ class WorkerTrace:
     def has_ping_traces(self) -> bool:
         return self.ping_traces is not None
 
+    def get_last_frame_finished_at(self) -> datetime:
+        return self.frame_render_traces[len(self.frame_render_traces) - 1].exited_process_at
+
     def get_tail_delay(self) -> float:
         last_frame = self.frame_render_traces[len(self.frame_render_traces) - 1]
 
         return (self.worker_job_finish_time - last_frame.exited_process_at).total_seconds()
+
+    def get_tail_delay_without_teardown(self, job_last_frame_finished_at: datetime) -> float:
+        return (job_last_frame_finished_at - self.get_last_frame_finished_at()).total_seconds()
 
 
 
@@ -299,3 +305,9 @@ class JobTrace:
 
     def get_job_finished_at(self) -> datetime:
         return self.job_finished_at or self.estimate_job_finished_at()
+
+    def get_last_frame_finished_at(self) -> datetime:
+        return max(
+            worker.get_last_frame_finished_at()
+            for worker in self.worker_traces.values()
+        )

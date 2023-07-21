@@ -1,3 +1,4 @@
+import statistics
 from typing import List, Tuple
 
 import matplotlib
@@ -9,6 +10,7 @@ from matplotlib.ticker import AutoMinorLocator
 from core.models import JobTrace
 from core.parser import load_traces_from_default_path
 from core.paths import WORKER_LATENCY_OUTPUT_DIRECTORY
+from core.timed_context import timed_section
 
 
 def plot_latency_against_cluster_size(
@@ -39,6 +41,51 @@ def plot_latency_against_cluster_size(
             ping_latencies_in_ms_at_cluster_size,
             f"{cluster_size}"
         ))
+
+
+    ###
+    # Print some statistics
+    overall_maximum_ping_latency = max([
+        ping_value
+        for ping_data, _ in ping_latency_in_ms_per_size
+        for ping_value in ping_data
+    ])
+    overall_mean_ping_latency = statistics.mean([
+        ping_value
+        for ping_data, _ in ping_latency_in_ms_per_size
+        for ping_value in ping_data
+    ])
+    overall_median_ping_latency = statistics.median([
+        ping_value
+        for ping_data, _ in ping_latency_in_ms_per_size
+        for ping_value in ping_data
+    ])
+    overall_minimum_ping_latency = min([
+        ping_value
+        for ping_data, _ in ping_latency_in_ms_per_size
+        for ping_value in ping_data
+    ])
+
+    num_pings = len([
+        ping_value
+        for ping_data, _ in ping_latency_in_ms_per_size
+        for ping_value in ping_data
+    ])
+    num_pings_above_25 = len([
+        ping_value
+        for ping_data, _ in ping_latency_in_ms_per_size
+        for ping_value in ping_data
+        if ping_value > 25
+    ])
+
+    print("Statistics:\n"
+          f"pings performed: {num_pings}\n"
+          f"overall maximum ping ms: {overall_maximum_ping_latency}\n"
+          f"overall minimum ping ms: {overall_minimum_ping_latency}\n"
+          f"overall mean ping ms: {overall_mean_ping_latency}\n"
+          f"overall median ping ms: {overall_median_ping_latency}\n"
+          f"overall number of pings above 50 ms: {num_pings_above_25}")
+    ###
 
 
     plot.violinplot(
@@ -99,12 +146,17 @@ def plot_latency_against_cluster_size(
     )
 
 
+
+def main_plot(traces: List[JobTrace]):
+    with timed_section("Worker Latency"):
+        with plt.style.context("seaborn-v0_8-paper"):
+            matplotlib.rcParams["path.simplify_threshold"] = 0.005
+            plot_latency_against_cluster_size(traces)
+
+
 def main():
     traces = load_traces_from_default_path()
-
-    with plt.style.context("seaborn-v0_8-paper"):
-        matplotlib.rcParams['path.simplify_threshold'] = 0.005
-        plot_latency_against_cluster_size(traces)
+    main_plot(traces)
 
 
 if __name__ == '__main__':

@@ -88,13 +88,20 @@ def plot_latency_against_cluster_size(
     ###
 
 
-    plot.violinplot(
+    # plot.violinplot(
+    #     [data for (data, _) in ping_latency_in_ms_per_size],
+    #     vert=True,
+    #     showmeans=True,
+    #     showmedians=False,
+    #     showextrema=False,
+    #     points=2000,
+    # )
+
+    plot.boxplot(
         [data for (data, _) in ping_latency_in_ms_per_size],
         vert=True,
-        showmeans=True,
-        showmedians=False,
-        showextrema=False,
-        points=2000,
+        patch_artist=True,
+        showfliers=False
     )
 
     plot.set_xticks(

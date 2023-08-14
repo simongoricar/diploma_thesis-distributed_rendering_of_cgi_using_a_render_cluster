@@ -24,7 +24,7 @@ def plot_efficiency(traces: List[JobTrace]):
     strategy_to_colour = {
         FrameDistributionStrategy.NAIVE_FINE: "bisque",
         FrameDistributionStrategy.EAGER_NAIVE_COARSE: "mediumaquamarine",
-        FrameDistributionStrategy.DYNAMIC: "slateblue",
+        FrameDistributionStrategy.DYNAMIC: "thistle",
     }
     bar_width = 0.32
 

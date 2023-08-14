@@ -116,11 +116,22 @@ def plot_utilization_rate_against_cluster_sizes(
 
 
     # Plot and add x-axis ticks.
-    plot.violinplot(
+    plot.boxplot(
         [data for (data, _) in utilization_columns],
         vert=True,
-        showmedians=True,
+        patch_artist=True,
+        showfliers=False,
+        boxprops={"facecolor": "steelblue", "edgecolor": "white", "linewidth": 0.5},
+        whiskerprops={"color": "steelblue", "linewidth": 1.5},
+        capprops={"color": "steelblue", "linewidth": 1.5},
+        medianprops={"color": "white", "linewidth": 1},
     )
+
+    # plot.violinplot(
+    #     [data for (data, _) in utilization_columns],
+    #     vert=True,
+    #     showmedians=True,
+    # )
 
     plot.set_xticks(
         list(range(1, len(utilization_columns) + 1)),
@@ -244,11 +255,22 @@ def plot_utilization_rate_against_strategies(
 
 
     # Plot and add x-axis ticks.
-    plot.violinplot(
+    plot.boxplot(
         [data for (data, _) in strategy_columns],
         vert=True,
-        showmedians=True,
+        patch_artist=True,
+        showfliers=False,
+        boxprops={"facecolor": "steelblue", "edgecolor": "white", "linewidth": 0.5},
+        whiskerprops={"color": "steelblue", "linewidth": 1.5},
+        capprops={"color": "steelblue", "linewidth": 1.5},
+        medianprops={"color": "white", "linewidth": 1},
     )
+
+    # plot.violinplot(
+    #     [data for (data, _) in strategy_columns],
+    #     vert=True,
+    #     showmedians=True,
+    # )
 
     plot.set_xticks(
         list(range(1, len(strategy_columns) + 1)),
@@ -324,11 +346,22 @@ def plot_non_tail_utilization_rate_against_cluster_sizes(
     plot: Axes = figure.add_subplot(label="non-tail-utilization-against-cluster-size")
 
     # Plot and add x-axis ticks.
-    plot.violinplot(
+    plot.boxplot(
         [data for (data, _) in utilization_columns],
         vert=True,
-        showmedians=True,
+        patch_artist=True,
+        showfliers=False,
+        boxprops={"facecolor": "steelblue", "edgecolor": "white", "linewidth": 0.5},
+        whiskerprops={"color": "steelblue", "linewidth": 1.5},
+        capprops={"color": "steelblue", "linewidth": 1.5},
+        medianprops={"color": "white", "linewidth": 1},
     )
+
+    # plot.violinplot(
+    #     [data for (data, _) in utilization_columns],
+    #     vert=True,
+    #     showmedians=True,
+    # )
 
     plot.set_xticks(
         list(range(1, len(utilization_columns) + 1)),

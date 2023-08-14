@@ -101,7 +101,11 @@ def plot_latency_against_cluster_size(
         [data for (data, _) in ping_latency_in_ms_per_size],
         vert=True,
         patch_artist=True,
-        showfliers=False
+        showfliers=False,
+        boxprops={"facecolor": "steelblue", "edgecolor": "white", "linewidth": 0.5},
+        whiskerprops={"color": "steelblue", "linewidth": 1.5},
+        capprops={"color": "steelblue", "linewidth": 1.5},
+        medianprops={"color": "white", "linewidth": 1},
     )
 
     plot.set_xticks(

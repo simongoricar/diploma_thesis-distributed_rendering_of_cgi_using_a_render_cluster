@@ -94,6 +94,8 @@ def _plot_tail_delay_for_cluster_in_seconds(
         ],
         vert=True,
         patch_artist=True,
+        medianprops={"color": "dimgrey", "linewidth": 1},
+        showfliers=False,
     )
 
     if set_y_label:
@@ -225,11 +227,13 @@ def _plot_tail_delay_for_cluster_scaled_to_average_frame_time(
         ],
         vert=True,
         patch_artist=True,
+        medianprops={"color": "dimgrey", "linewidth": 1},
+        showfliers=False,
     )
 
     if set_y_label:
         plot.set_ylabel(
-            r"$\frac{Repni zamik v sekundah}{Povprečen čas izrisa ene sličice}$",
+            r"$\frac{Repni~zamik~v~sekundah}{Povprečen~čas~izrisa~ene~sličice}$",
             labelpad=12,
             fontsize="medium",
         )
@@ -296,7 +300,7 @@ def plot_tail_delay(
     first_figure.delaxes(first_plots[2, 1])
 
     first_figure.suptitle(
-        "Repni zamik"
+        "Latenca ob zaključevanju poslov"
     )
 
     _plot_tail_delay_for_cluster_in_seconds(
@@ -354,7 +358,7 @@ def plot_tail_delay(
     second_figure.delaxes(second_plots[2, 1])
 
     second_figure.suptitle(
-        "Repni zamik, normaliziran na povprečen čas izrisa sličice"
+        "Latenca ob zaključevanju poslov, normalizirana na povprečen čas izrisa sličice"
     )
 
     _plot_tail_delay_for_cluster_scaled_to_average_frame_time(

@@ -27,11 +27,11 @@ def plot_reading_render_writing_distribution_against_cluster_size(
     plot: Axes = figure.add_subplot()
 
     cluster_sizes_to_plot = [1, 5, 10, 20, 40, 80]
-    bar_height = 0.5
+    bar_height = 0.65
     color_per_time_type = {
-        TimeType.LOADING: "sandybrown",
-        TimeType.RENDERING: "lightcoral",
-        TimeType.SAVING: "skyblue",
+        TimeType.LOADING: "mistyrose",
+        TimeType.RENDERING: "wheat",
+        TimeType.SAVING: "lavender",
     }
 
     data: List[Tuple[
@@ -120,6 +120,7 @@ def plot_reading_render_writing_distribution_against_cluster_size(
             barh_plot,
             label_type="center",
             padding=2,
+            fontsize="medium",
             fmt=lambda value: f"{round(value * 100, 1)}%",
         )
 
@@ -147,22 +148,23 @@ def plot_reading_render_writing_distribution_against_cluster_size(
     )
 
     plot.set_xlabel(
-        "Delež povprečnega izrisovalnega časa",
+        "Povprečni delež izrisovalnega časa",
         labelpad=12,
         fontsize="medium",
     )
     plot.set_ylabel(
-        "Velikost gruče (št. vozlišč)",
+        "Število delovnih vozlišč v gruči",
         labelpad=12,
         fontsize="medium",
     )
+
+    plot.set_xticks([])
+    plot.set_xticks([], minor=True)
 
     plot.set_xbound(
         lower=0,
         upper=1
     )
-
-    # TODO
 
     figure.savefig(
         READING_RENDERING_WRITING_OUTPUT_DIRECTORY

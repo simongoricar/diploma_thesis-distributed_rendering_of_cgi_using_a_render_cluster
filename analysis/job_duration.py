@@ -26,7 +26,7 @@ def plot_job_duration_against_cluster_sizes_and_strategies(
     strategy_to_colour = {
         FrameDistributionStrategy.NAIVE_FINE: "bisque",
         FrameDistributionStrategy.EAGER_NAIVE_COARSE: "mediumaquamarine",
-        FrameDistributionStrategy.DYNAMIC: "slateblue",
+        FrameDistributionStrategy.DYNAMIC: "thistle",
     }
 
     figure: Figure = plt.figure(figsize=(8, 9), dpi=100, layout="constrained")

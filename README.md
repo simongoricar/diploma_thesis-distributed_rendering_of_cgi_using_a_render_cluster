@@ -69,4 +69,5 @@ poetry run python run_all.py
 These scripts expect the directory `blender-projects/04_very-simple/results/arnes-results` to contain
 one or more raw tracing files (e.g. `2023-07-13_22-25-42_job-04vs_demo_10f-1w_eager-naive-coarse_raw-trace.json`).
 
-Plots will be generated in the `analysis/plots` directory.
+Plots will be generated in the `analysis/plots` directory. 
+The plots from our tests are also available in the same directory. 
